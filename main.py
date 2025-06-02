@@ -1,0 +1,1 @@
+print("bot berhasil dijalankan")
