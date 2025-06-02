@@ -11,7 +11,19 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 # --- GOOGLE SHEETS SETUP ---
 scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-creds = ServiceAccountCredentials.from_json_keyfile_name('gspread_credentials.json', scope)
+import json
+import os
+
+from oauth2client.service_account import ServiceAccountCredentials
+
+# Ambil isi credential dari environment variable
+json_creds = os.environ.get("GCP_CREDENTIALS_JSON")
+
+# Ubah string JSON ke dictionary
+creds_dict = json.loads(json_creds)
+
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 sheet = client.open('Checkin Sales').sheet1  # Ganti nama jika beda
 
