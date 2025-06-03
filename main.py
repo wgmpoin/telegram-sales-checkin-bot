@@ -1,62 +1,22 @@
 import os
 import json
-import logging
-from flask import Flask
-from datetime import datetime
+import base64
+from google.oauth2 import service_account
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters as tg_filters
-)
 
-# Logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+# Ambil base64 JSON dari environment
+base64_creds = os.environ.get("GCP_CREDENTIALS_BASE64")
+if not base64_creds:
+    raise Exception("GCP_CREDENTIALS_BASE64 not set")
 
-# --- Google Sheets Setup ---
-json_creds = os.environ.get("GCP_CREDENTIALS_JSON")
-if not json_creds:
-    raise Exception("GCP_CREDENTIALS_JSON not found in environment variables.")
-creds_dict = json.loads(json_creds)
+# Decode & parse
+json_str = base64.b64decode(base64_creds).decode("utf-8")
+creds_dict = json.loads(json_str)
 
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-client = gspread.authorize(creds)
-sheet = client.open('Checkin Sales').sheet1  # Ganti dengan nama sheet-mu jika berbeda
+# Gunakan google-auth (BUKAN oauth2client)
+scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+credentials = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
 
-# --- Flask (untuk jaga-jaga Render butuh web server aktif) ---
-app = Flask(__name__)
-@app.route('/')
-def home():
-    return "Bot is running!"
-
-# --- Telegram Bot Handlers ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Halo! Silakan ketik nama toko untuk check-in.")
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.message.from_user
-    store_name = update.message.text
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-    # Simpan ke Google Sheets
-    sheet.append_row([str(user.id), user.first_name, store_name, timestamp])
-
-    await update.message.reply_text(
-        f"Check-in disimpan!\nNama toko: {store_name}\nWaktu: {timestamp}"
-    )
-
-# --- Bot Entry Point ---
-def main():
-    TOKEN = os.getenv("BOT_TOKEN")
-    if not TOKEN:
-        raise Exception("BOT_TOKEN tidak ditemukan di environment variable.")
-
-    app_bot = ApplicationBuilder().token
+# Authorize ke Google Sheets
+gc = gspread.authorize(credentials)
+sheet = gc.open("Checkin Sales").sheet1
