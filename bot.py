@@ -48,7 +48,7 @@ creds_dict = json.loads(json_str)
 
 # Use google-auth (not oauth2client)
 scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-credentials = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
+credentials = service_account.Credentials.from_service_account_file("service_account.json", scopes=scopes)
 client = gspread.authorize(credentials)
 sheet = client.open('Checkin Sales').sheet1
 
