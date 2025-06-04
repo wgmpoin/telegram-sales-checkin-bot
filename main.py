@@ -1,3 +1,17 @@
+import base64
+import json
+
+# Ambil isi base64 dari environment
+encoded = os.getenv("GCP_CREDENTIALS_BASE64")
+
+if not encoded:
+    raise Exception("GCP_CREDENTIALS_BASE64 not set")
+
+# Decode dan simpan ke file
+decoded = base64.b64decode(encoded)
+with open("service_account.json", "wb") as f:
+    f.write(decoded)
+    
 import os
 import json
 import base64
