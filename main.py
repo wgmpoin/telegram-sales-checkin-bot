@@ -1,34 +1,54 @@
-import os
-import json
-import base64
-from google.oauth2 import service_account
-import gspread
+main.py
 
-# Ambil base64 dari environment
-encoded = os.getenv("GCP_CREDENTIALS_BASE64")
-if not encoded:
-    raise Exception("GCP_CREDENTIALS_BASE64 not set")
+import os import base64 import json import logging
 
-# Decode base64 jadi JSON string
-json_str = base64.b64decode(encoded).decode("utf-8")
+from flask import Flask from telegram import Update from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters from google.oauth2 import service_account import gspread
 
-# Parse jadi dictionary
-creds_dict = json.loads(json_str)
+====== Setup Logging ======
 
-# Buat credentials dari dictionary
-scopes = [
-    'https://www.googleapis.com/auth/spreadsheets',
-    'https://www.googleapis.com/auth/drive'
-]
-credentials = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
+logging.basicConfig(level=logging.INFO) logger = logging.getLogger(name)
 
-# Authorisasi gspread
-gc = gspread.authorize(credentials)
+====== Load Google Credentials from base64 ENV ======
 
-# Buka spreadsheet (ganti dengan nama file spreadsheet kamu)
-sheet = gc.open("Checkin Sales").sheet1
+creds_b64 = os.getenv("GCP_CREDENTIALS_BASE64") if not creds_b64: raise Exception("GCP_CREDENTIALS_BASE64 not set")
 
-# Tes akses sheet
-print("✅ Berhasil terhubung ke Google Sheets.")
-print("Contoh data dari baris pertama:")
-print(sheet.row_values(1))
+creds_dict = json.loads(base64.b64decode(creds_b64).decode("utf-8")) scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"] credentials = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
+
+gc = gspread.authorize(credentials) sheet = gc.open("Checkin Sales").sheet1  # ganti sesuai spreadsheet
+
+====== Setup Bot ======
+
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") if not BOT_TOKEN: raise Exception("TELEGRAM_BOT_TOKEN not set")
+
+app = Application.builder().token(BOT_TOKEN).build()
+
+====== Bot Handlers ======
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("Halo! Kirim nama toko untuk check-in.")
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE): user = update.effective_user store_name = update.message.text.strip()
+
+# Simpan ke Google Sheets
+sheet.append_row([
+    user.full_name,
+    store_name,
+    update.message.date.strftime("%Y-%m-%d %H:%M:%S"),
+    str(user.id)
+])
+
+await update.message.reply_text(f"Check-in dicatat untuk toko: {store_name}")
+
+====== Flask Webhook ======
+
+flask_app = Flask(name)
+
+@flask_app.route("/") def index(): return "Bot is running!"
+
+====== Register Bot Handlers ======
+
+app.add_handler(CommandHandler("start", start)) app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+====== Run Bot ======
+
+if name == "main": import asyncio asyncio.run(app.run_polling())
+
