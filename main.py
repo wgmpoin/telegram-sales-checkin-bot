@@ -1,21 +1,33 @@
 import os
 import json
-import base64
+import logging
+from flask import Flask
 from google.oauth2 import service_account
+import gspread
 
-# Ambil string BASE64 dari environment
-creds_base64 = os.getenv("GCP_CREDENTIALS_BASE64")
+logging.basicConfig(level=logging.INFO)
 
-# Decode base64 ke JSON
-creds_json = base64.b64decode(creds_base64).decode("utf-8")
-creds_dict = json.loads(creds_json)
+# Load credentials from ENV and convert to dict
+creds_raw = os.environ.get("GCP_CREDENTIALS_BASE64")
+creds_dict = json.loads(creds_raw)
 
-# Fix untuk multiline private_key
-if "private_key" in creds_dict:
-    creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+# Convert \\n to \n in private_key
+creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
 
-# Buat credentials Google
+# Define scopes and credentials
 scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-credentials = service_account.Credentials.from_service_account_info(
-    creds_dict, scopes=scopes
-)
+credentials = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
+
+# Connect to Google Sheets
+gc = gspread.authorize(credentials)
+sheet = gc.open("Nama Spreadsheet Anda").sheet1  # Ubah sesuai nama spreadsheet Anda
+
+# Simple Flask app
+app = Flask(__name__)
+
+@app.route("/")
+def index():
+    return "Bot is running!"
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
