@@ -1,53 +1,52 @@
 import os
 import json
 import base64
-from google.oauth2.service_account import Credentials
+import logging
+from flask import Flask
+from google.oauth2 import service_account
 import gspread
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-# ===== DECODE GCP CREDENTIALS =====
-base64_creds = os.getenv("GCP_CREDENTIALS_BASE64")
+# Konfigurasi logging
+logging.basicConfig(level=logging.INFO)
+
+# === Ambil kredensial dari environment dan decode ===
+base64_creds = os.environ.get("GCP_CREDENTIALS_BASE64")
 if not base64_creds:
-    raise Exception("GCP_CREDENTIALS_BASE64 environment variable not set")
+    raise Exception("GCP_CREDENTIALS_BASE64 not set")
 
 creds_json = base64.b64decode(base64_creds).decode("utf-8")
 creds_dict = json.loads(creds_json)
 
-scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-
-# ===== CONNECT TO GOOGLE SHEETS =====
+# Setup Google Sheets client
+scopes = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+credentials = service_account.Credentials.from_service_account_info(
+    creds_dict, scopes=scopes
+)
 gc = gspread.authorize(credentials)
-sheet = gc.open("Checkin Sales").sheet1  # ganti dengan nama spreadsheet kamu
+sheet = gc.open("Checkin Sales").sheet1
 
-# ===== TELEGRAM BOT SETUP =====
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise Exception("BOT_TOKEN environment variable not set")
+# === Bot Telegram ===
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+if not TELEGRAM_TOKEN:
+    raise Exception("TELEGRAM_TOKEN not set")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Halo! Kirimkan nama toko untuk check-in.")
+    await update.message.reply_text("Bot aktif. Silakan kirim perintah check-in.")
 
-async def checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    nama_toko = update.message.text
-    user_id = update.effective_user.id
-    username = update.effective_user.username or "-"
-    nama = update.effective_user.full_name
+# Setup Flask untuk healthcheck (dibutuhkan Render)
+app = Flask(__name__)
 
-    sheet.append_row([
-        str(user_id),
-        username,
-        nama,
-        nama_toko,
-        update.message.date.strftime("%Y-%m-%d %H:%M:%S")
-    ])
+@app.route("/")
+def index():
+    return "Bot aktif!"
 
-    await update.message.reply_text("✅ Check-in dicatat untuk toko: " + nama_toko)
-
-app = Application.builder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("checkin", checkin))
-app.add_handler(CommandHandler("help", start))  # bantuan = /help
-
-app.run_polling()
+# Jalankan bot Telegram
+if __name__ == "__main__":
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.run_polling()
