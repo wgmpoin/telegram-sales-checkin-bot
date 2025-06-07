@@ -6,6 +6,7 @@ from datetime import datetime
 from flask import Flask
 from google.oauth2 import service_account
 import gspread
+import asyncio # Tambahkan import asyncio
 
 # Impor modul Telegram Bot
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
@@ -183,7 +184,7 @@ async def lokasi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         lat = update.message.location.latitude
         lon = update.message.location.longitude
         # Format link Google Maps yang lebih standar
-        location_link = f"https://maps.google.com/maps?q={lat},{lon}"
+        location_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
         logging.info(f"Lokasi diterima: Lat={lat}, Lon={lon} dari {update.effective_user.full_name}")
     elif update.message.text and update.message.text.lower() == 'skip':
         logging.info(f"Lokasi dilewati oleh {update.effective_user.full_name}")
@@ -215,15 +216,21 @@ async def jumlah_kunjungan(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return JUMLAH_KUNJUNGAN # Tetap di state JUMLAH_KUNJUNGAN jika input tidak valid
 
     # Mendapatkan tanggal dan waktu saat ini (WITA)
-    # Karena Render.com biasanya UTC, kita perlu menyesuaikan timezone jika ingin WITA di log/sheet
-    # Untuk kesederhanaan, kita akan biarkan waktu server (UTC) dulu atau pastikan Render di WITA.
-    # Namun, karena ini untuk spreadsheet, kita akan gunakan waktu server dan berasumsi sudah diatur/dikonversi di sheet.
-    now = datetime.now() 
+    # Gunakan pytz untuk timezone yang akurat
+    # import pytz # Anda perlu menambahkan 'pytz' ke requirements.txt jika menggunakannya
+    # bali_tz = pytz.timezone('Asia/Makassar') # WITA
+    # now = datetime.now(bali_tz)
+    
+    # Untuk kesederhanaan saat ini, kita gunakan waktu server Render (UTC)
+    # Jika ingin WITA, Anda bisa menambahkan `pytz` ke `requirements.txt` dan uncomment kode di atas
+    now = datetime.now() # Ini akan menggunakan waktu UTC di Render.com
     tanggal = now.strftime("%Y-%m-%d") # Format YYYY-MM-DD
     waktu = now.strftime("%H:%M:%S")    # Format HH:MM:SS
 
     # Mengumpulkan semua data
     row_data = [
+        update.effective_user.full_name, # Nama sales
+        update.effective_user.id,        # ID Sales
         user_data.get('nama_toko', ''),
         user_data.get('alamat_wilayah', ''),
         tanggal,
@@ -239,6 +246,8 @@ async def jumlah_kunjungan(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             logging.info(f"Data berhasil dicatat ke spreadsheet: {row_data}")
             await update.message.reply_text(
                 "✅ Check-in berhasil dicatat!\n"
+                f"Nama Sales: *{update.effective_user.full_name}*\n"
+                f"ID Sales: *{update.effective_user.id}*\n"
                 f"Nama Toko: *{user_data['nama_toko']}*\n"
                 f"Alamat/Wilayah: *{user_data['alamat_wilayah']}*\n"
                 f"Link Lokasi: {user_data['link_lokasi']}\n"
@@ -279,7 +288,7 @@ def index():
     return "Bot Telegram Sales Checkin sedang berjalan!"
 
 # Fungsi utama untuk menjalankan bot Telegram (dengan Flask)
-async def run_bot():
+async def run_bot_telegram(): # Ganti nama fungsi untuk menghindari konflik dengan fungsi Flask
     """Menjalankan bot Telegram."""
     telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not telegram_token:
@@ -308,26 +317,9 @@ async def run_bot():
     application.add_handler(CommandHandler("cancel", cancel_command)) # Handler cancel global
 
     logging.info("Bot Telegram mulai polling untuk update...")
+    # Gunakan application.run_polling() secara langsung di dalam asyncio.run
     await application.run_polling(poll_interval=3.0, timeout=30)
 
 
 if __name__ == "__main__":
-    # Inisialisasi Google Sheets dan Authorized Sales IDs saat aplikasi dimulai
-    logging.info("Menginisialisasi koneksi Google Sheets...")
-    if not initialize_google_sheets():
-        logging.error("Gagal menginisialisasi Google Sheets. Bot mungkin tidak dapat mencatat data.")
-        # Tetap lanjutkan untuk Flask agar Render tidak error, tapi fungsionalitas Sheets tidak akan jalan
-    
-    logging.info("Memuat daftar authorized sales IDs...")
-    load_authorized_sales_ids()
-
-    # Jalankan bot Telegram di background menggunakan asyncio task
-    import asyncio
-    logging.info("Mulai menjalankan bot Telegram sebagai task asyncio...")
-    asyncio.create_task(run_bot())
-    logging.info("Bot Telegram berhasil dijalankan sebagai task asyncio.")
-
-    # Jalankan aplikasi Flask di thread utama
-    port = int(os.environ.get("PORT", 5000))
-    logging.info(f"Aplikasi Flask dimulai di port {port}...")
-    app.run(host="0.0.0.0", port=port)
+    # Inis
