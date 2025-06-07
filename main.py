@@ -44,7 +44,10 @@ try:
     gc = gspread.authorize(credentials)
 
     # --- PENTING: UBAH INI SESUAI NAMA SPREADSHEET ANDA DI GOOGLE SHEETS ---
-    sheet = gc.open("Nama Spreadsheet Anda").sheet1 # Ganti "Checkin Sales"
+    # Ganti dengan Spreadsheet ID yang Anda salin dari URL
+SPREADSHEET_ID = "https://docs.google.com/spreadsheets/d/1xx1WzEqrp2LYrg-VTgOPwAhk15DigpBodPM9Bm6pbD4/edit?gid=0#gid=0"
+sheet = gc.open_by_key(SPREADSHEET_ID).sheet1
+logging.info(f"Successfully connected to Google Sheet via ID: '{SPREADSHEET_ID}'")
     logging.info(f"Successfully connected to Google Sheet: '{sheet.title}'")
 
 except base64.binascii.Error as e:
