@@ -9,7 +9,7 @@ import gspread
 # Konfigurasi logging agar lebih mudah melihat pesan di log Render
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-logging.info("Starting bot deployment process...")
+logging.info("Memulai proses deployment bot...")
 
 # --- Bagian Kredensial GCP ---
 creds_base64 = os.environ.get("GCP_CREDENTIALS_BASE64")
@@ -20,38 +20,39 @@ if not creds_base64:
 
 try:
     creds_decoded = base64.b64decode(creds_base64).decode('utf-8')
-    logging.info("GCP_CREDENTIALS_BASE64 successfully decoded from Base64.")
+    logging.info("GCP_CREDENTIALS_BASE64 berhasil didekode dari Base64.")
 
     creds_dict = json.loads(creds_decoded)
-    logging.info("GCP_CREDENTIALS_BASE64 successfully parsed as JSON.")
+    logging.info("GCP_CREDENTIALS_BASE64 berhasil diparse sebagai JSON.")
 
     if "private_key" in creds_dict:
         # Menangani karakter newline yang di-escape dari string Base64
         creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-        logging.info("Replaced '\\n' with '\\n' in private_key.")
+        logging.info("Mengganti '\\n' dengan '\\n' di private_key.")
     else:
-        logging.warning("Private key not found in credentials dictionary.")
+        logging.warning("Kunci privat tidak ditemukan dalam kamus kredensial.")
 
     # Definisikan cakupan (scopes) untuk Google Sheets API dan Google Drive API
+    # KEDUA SCOPE INI SANGAT PENTING untuk gspread
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets", # Untuk Google Sheets
         "https://www.googleapis.com/auth/drive"         # Untuk Google Drive (dibutuhkan gspread)
     ]
     credentials = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
-    logging.info("Google service account credentials loaded successfully.")
+    logging.info("Kredensial akun layanan Google berhasil dimuat.")
 
     # Otentikasi dan koneksi ke Google Sheets
     gc = gspread.authorize(credentials)
 
-    # --- PENTING: GANTI INI DENGAN SPREADSHEET ID ANDA ---
-    # Dapatkan Spreadsheet ID dari URL Google Sheets Anda (antara /d/ dan /edit)
-    SPREADSHEET_ID = "PASTE_SPREADSHEET_ID_ANDA_DI_SINI"
+    # --- PENTING: Spreadsheet ID Anda dari link yang diberikan ---
+    SPREADSHEET_ID = "1xx1WzEqrp2LYrg-VTgOPwAhk15DigpBodPM9Bm6pbD4"
     
     # --- PENTING: Pastikan nama sheet pertama benar. Umumnya 'sheet1'
-    # Jika sheet pertama Anda bernama "Data" (bukan "Sheet1"), ubah '.sheet1' menjadi '.worksheet("Data")'
+    # Jika sheet pertama Anda bernama "Data" (bukan "Sheet1"),
+    # ubah '.sheet1' menjadi `.worksheet("Data")`
     sheet = gc.open_by_key(SPREADSHEET_ID).sheet1
     
-    logging.info(f"Successfully connected to Google Sheet with ID: '{SPREADSHEET_ID}' and Sheet Name: '{sheet.title}'")
+    logging.info(f"Berhasil terhubung ke Google Sheet dengan ID: '{SPREADSHEET_ID}' dan nama Sheet: '{sheet.title}'")
 
 except base64.binascii.Error as e:
     logging.error(f"ERROR: Gagal dekode Base64. Pastikan nilai GCP_CREDENTIALS_BASE64 adalah string Base64 yang valid. Error: {e}")
@@ -64,7 +65,8 @@ except gspread.exceptions.SpreadsheetNotFound:
     exit(1)
 except gspread.exceptions.APIError as e:
     logging.error(f"ERROR: Terjadi kesalahan API Google Sheets/Drive. Pesan: {e}")
-    logging.error("Penyebab mungkin: API belum diaktifkan atau izin akun layanan tidak cukup. Periksa log detil untuk info lebih lanjut.")
+    logging.error("Penyebab mungkin: API belum diaktifkan, izin akun layanan tidak cukup, atau ada masalah dengan koneksi.")
+    logging.error("Periksa pesan error detil dan pastikan semua API yang dibutuhkan sudah aktif di Google Cloud.")
     exit(1)
 except Exception as e:
     logging.error(f"ERROR: Terjadi kesalahan tidak terduga saat menyiapkan Google Sheets: {e}")
@@ -76,9 +78,9 @@ app = Flask(__name__)
 
 @app.route("/")
 def index():
-    return "Telegram Sales Checkin Bot is running!"
+    return "Bot Telegram Sales Checkin sedang berjalan!"
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    logging.info(f"Flask app starting on port {port}...")
+    logging.info(f"Aplikasi Flask dimulai di port {port}...")
     app.run(host="0.0.0.0", port=port)
