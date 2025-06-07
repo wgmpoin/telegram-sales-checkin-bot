@@ -344,12 +344,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-Pastikan Langkah Ini Dilakukan
-Setelah Anda menempelkan kode di atas dan menyimpan main.py:
-
-Commit perubahan Anda:
-
-Bash
-
-git add .
-git commit -m "Fix final SyntaxError at line 171 and adjusted Google Maps URL"
