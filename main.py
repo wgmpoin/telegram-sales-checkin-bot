@@ -26,13 +26,13 @@ try:
     logging.info("GCP_CREDENTIALS_BASE64 successfully parsed as JSON.")
 
     if "private_key" in creds_dict:
+        # Menangani karakter newline yang di-escape dari string Base64
         creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         logging.info("Replaced '\\n' with '\\n' in private_key.")
     else:
         logging.warning("Private key not found in credentials dictionary.")
 
     # Definisikan cakupan (scopes) untuk Google Sheets API dan Google Drive API
-    # KEDUA SCOPE INI SANGAT PENTING
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets", # Untuk Google Sheets
         "https://www.googleapis.com/auth/drive"         # Untuk Google Drive (dibutuhkan gspread)
@@ -43,9 +43,15 @@ try:
     # Otentikasi dan koneksi ke Google Sheets
     gc = gspread.authorize(credentials)
 
-    # --- PENTING: UBAH INI SESUAI NAMA SPREADSHEET ANDA DI GOOGLE SHEETS ---
-    sheet = gc.open("Nama Spreadsheet Anda").sheet1 # Ganti "Checkin Sales"
-    logging.info(f"Successfully connected to Google Sheet: '{sheet.title}'")
+    # --- PENTING: GANTI INI DENGAN SPREADSHEET ID ANDA ---
+    # Dapatkan Spreadsheet ID dari URL Google Sheets Anda (antara /d/ dan /edit)
+    SPREADSHEET_ID = "PASTE_SPREADSHEET_ID_ANDA_DI_SINI"
+    
+    # --- PENTING: Pastikan nama sheet pertama benar. Umumnya 'sheet1'
+    # Jika sheet pertama Anda bernama "Data" (bukan "Sheet1"), ubah '.sheet1' menjadi '.worksheet("Data")'
+    sheet = gc.open_by_key(SPREADSHEET_ID).sheet1
+    
+    logging.info(f"Successfully connected to Google Sheet with ID: '{SPREADSHEET_ID}' and Sheet Name: '{sheet.title}'")
 
 except base64.binascii.Error as e:
     logging.error(f"ERROR: Gagal dekode Base64. Pastikan nilai GCP_CREDENTIALS_BASE64 adalah string Base64 yang valid. Error: {e}")
@@ -54,10 +60,14 @@ except json.JSONDecodeError as e:
     logging.error(f"ERROR: Gagal parsing JSON. Pastikan nilai GCP_CREDENTIALS_BASE64 (setelah didekode) adalah JSON yang valid. Error: {e}")
     exit(1)
 except gspread.exceptions.SpreadsheetNotFound:
-    logging.error("ERROR: Spreadsheet tidak ditemukan. Pastikan 'Nama Spreadsheet Anda' sudah benar dan akun layanan memiliki akses.")
+    logging.error("ERROR: Spreadsheet tidak ditemukan. Pastikan Spreadsheet ID sudah benar dan akun layanan memiliki akses.")
+    exit(1)
+except gspread.exceptions.APIError as e:
+    logging.error(f"ERROR: Terjadi kesalahan API Google Sheets/Drive. Pesan: {e}")
+    logging.error("Penyebab mungkin: API belum diaktifkan atau izin akun layanan tidak cukup. Periksa log detil untuk info lebih lanjut.")
     exit(1)
 except Exception as e:
-    logging.error(f"ERROR: Terjadi kesalahan lain saat menyiapkan Google Sheets: {e}")
+    logging.error(f"ERROR: Terjadi kesalahan tidak terduga saat menyiapkan Google Sheets: {e}")
     logging.error(f"Detil error: {e.args[0] if e.args else 'Tidak ada detil tambahan'}")
     exit(1)
 
