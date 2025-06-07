@@ -1,194 +1,193 @@
 import os
-import json
 import logging
-import base64
-from datetime import datetime
-from flask import Flask, request, abort
-from google.oauth2 import service_account
+from flask import Flask, request, jsonify
+from telegram import Update
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes
+)
 import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+import json
+from datetime import datetime, timezone, timedelta
 import asyncio
 
-# Konfigurasi logging agar lebih mudah melihat pesan di log Render
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# --- Konfigurasi Logger ---
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-logging.info("Memulai proses deployment bot...")
-
-# --- States untuk ConversationHandler ---
-NAMA_TOKO, ALAMAT_WILAYAH, LOKASI, JUMLAH_KUNJUNGAN = range(4)
-
-# --- Variabel Global untuk gspread ---
-gc = None
-sheet = None
-# PASTIKAN SPREADSHEET_ID INI SESUAI DENGAN ID GOOGLE SHEET ANDA
-# Contoh: "1xx1WzEqrp2LYrg-VTpOPQAhk15DigpBodPM9Bm6pbD4"
-SPREADSHEET_ID = os.environ.get("GOOGLE_SHEET_ID") # Mengambil dari Environment Variable
-# PASTIKAN SHEET_TAB_NAME INI SESUAI DENGAN NAMA TAB DI GOOGLE SHEET ANDA (contoh: "Checkin")
-SHEET_TAB_NAME = os.environ.get("GOOGLE_SHEET_TAB_NAME", "Checkin") # Mengambil dari Environment Variable, default "Checkin"
-
-# --- Variabel untuk Authorized Sales ---
-AUTHORIZED_SALES_IDS = set() # Akan diisi dari environment variable
-
-# --- Inisialisasi Aplikasi Bot Telegram (akan di-pass ke Flask) ---
-application = None # Akan diinisialisasi nanti
-
-# --- Fungsi untuk Inisialisasi Google Sheets ---
-def initialize_google_sheets():
-    global gc, sheet
-    creds_base64 = os.environ.get("GCP_CREDENTIALS_BASE64")
-
-    if not creds_base64:
-        logging.error("ERROR: Variabel environment 'GCP_CREDENTIALS_BASE64' tidak ditemukan atau kosong. Tidak dapat terhubung ke Google Sheets.")
-        return False
+# --- Konfigurasi Google Sheets ---
+# Dapatkan kredensial dari variabel lingkungan
+try:
+    GSPREAD_SERVICE_ACCOUNT_KEY = os.environ.get('GSPREAD_SERVICE_ACCOUNT_KEY')
+    if not GSPREAD_SERVICE_ACCOUNT_KEY:
+        raise ValueError("GSPREAD_SERVICE_ACCOUNT_KEY environment variable not set.")
     
+    # Kredensial adalah JSON string, perlu di-parse
+    creds_json = json.loads(GSPREAD_SERVICE_ACCOUNT_KEY)
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json,
+                                                             scopes=['https://spreadsheets.google.com/feeds',
+                                                                     'https://www.googleapis.com/auth/drive'])
+    client = gspread.authorize(creds)
+    
+    SPREADSHEET_ID = os.environ.get('GOOGLE_SHEET_ID')
+    SHEET_TAB_NAME = os.environ.get('GOOGLE_SHEET_TAB_NAME', "Checkin") # Default to "Checkin"
+
     if not SPREADSHEET_ID:
-        logging.error("ERROR: Variabel environment 'GOOGLE_SHEET_ID' tidak ditemukan atau kosong. Tidak dapat terhubung ke Google Sheets.")
-        return False
+        raise ValueError("GOOGLE_SHEET_ID environment variable not set.")
 
-    try:
-        creds_decoded = base64.b64decode(creds_base64).decode('utf-8')
-        creds_dict = json.loads(creds_decoded)
+    spreadsheet = client.open_by_key(SPREADSHEET_ID)
+    worksheet = spreadsheet.worksheet(SHEET_TAB_NAME)
+    logger.info(f"Berhasil terhubung ke Google Sheet (ID: '{SPREADSHEET_ID}', Tab: '{SHEET_TAB_NAME}')")
 
-        if "private_key" in creds_dict:
-            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+except Exception as e:
+    logger.error(f"ERROR: {e}")
+    logger.error("Gagal menginisialisasi Google Sheets. Bot mungkin tidak dapat mencatat data.")
+    worksheet = None # Pastikan worksheet adalah None jika gagal inisialisasi
 
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        credentials = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        gc = gspread.authorize(credentials)
+# --- Muat Authorized Sales IDs ---
+authorized_sales_ids_str = os.environ.get('AUTHORIZED_SALES', '')
+if authorized_sales_ids_str:
+    authorized_sales_ids = {int(uid.strip()) for uid in authorized_sales_ids_str.split(',') if uid.strip().isdigit()}
+else:
+    authorized_sales_ids = set() # Kosongkan jika tidak ada ID
+logger.info(f"Memuat daftar authorized sales IDs...")
+logger.info(f"Authorized sales IDs loaded: {authorized_sales_ids}")
 
-        spreadsheet = gc.open_by_key(SPREADSHEET_ID)
-        sheet = spreadsheet.worksheet(SHEET_TAB_NAME)
-        
-        logging.info(f"Berhasil terhubung ke Google Sheet (ID: '{SPREADSHEET_ID}', Tab: '{SHEET_TAB_NAME}')")
-        return True
+# --- Inisialisasi Bot Telegram ---
+TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+WEBHOOK_URL = os.environ.get('WEBHOOK_URL')
 
-    except base64.binascii.Error as e:
-        logging.error(f"ERROR: Gagal dekode Base64. Error: {e}")
-        return False
-    except json.JSONDecodeError as e:
-        logging.error(f"ERROR: Gagal parsing JSON. Error: {e}")
-        return False
-    except gspread.exceptions.SpreadsheetNotFound:
-        logging.error("ERROR: Spreadsheet tidak ditemukan. Pastikan Google Sheet ID sudah benar dan akun layanan memiliki akses ke spreadsheet.")
-        return False
-    except gspread.exceptions.WorksheetNotFound:
-        logging.error(f"ERROR: Tab sheet '{SHEET_TAB_NAME}' tidak ditemukan dalam spreadsheet. Pastikan nama tab benar dan case-sensitive.")
-        return False
-    except gspread.exceptions.APIError as e:
-        logging.error(f"ERROR: Terjadi kesalahan API Google Sheets/Drive. Pesan: {e}")
-        logging.error("Penyebab mungkin: API belum diaktifkan, izin akun layanan tidak cukup, atau ada masalah dengan koneksi.")
-        return False
-    except Exception as e:
-        logging.error(f"ERROR: Terjadi kesalahan tidak terduga saat menyiapkan Google Sheets: {e}")
-        return False
+if not TOKEN:
+    logger.error("TELEGRAM_BOT_TOKEN belum diatur!")
+    exit(1)
 
-# --- Fungsi untuk Memuat Authorized Sales IDs ---
-def load_authorized_sales_ids():
-    global AUTHORIZED_SALES_IDS
-    authorized_ids_str = os.environ.get("AUTHORIZED_SALES")
-    if authorized_ids_str:
-        try:
-            AUTHORIZED_SALES_IDS = set(map(int, authorized_ids_str.split(',')))
-            logging.info(f"Authorized sales IDs loaded: {AUTHORIZED_SALES_IDS}")
-        except ValueError:
-            logging.error("ERROR: AUTHORIZED_SALES environment variable contains non-integer values. Please use comma-separated integers.")
-            AUTHORIZED_SALES_IDS = set()
-    else:
-        logging.warning("WARNING: AUTHORIZED_SALES environment variable is not set. Bot will not restrict access.")
+if not WEBHOOK_URL:
+    logger.error("WEBHOOK_URL belum diatur!")
+    exit(1)
 
-# --- Middleware untuk Memeriksa Otorisasi ---
-async def check_authorization(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if AUTHORIZED_SALES_IDS and user_id not in AUTHORIZED_SALES_IDS:
-        logging.warning(f"Akses ditolak untuk user ID: {user_id} ({update.effective_user.full_name})")
-        await update.message.reply_text("Maaf, Anda tidak memiliki izin untuk menggunakan bot ini.")
-        return False
-    return True
+# Application bot harus diinisialisasi secara global
+application = Application.builder().token(TOKEN).build()
+logger.info("Menginisialisasi bot Telegram (webhook mode)...")
 
-# --- Fungsi-fungsi Handler Bot Telegram ---
+
+# --- Fungsi Handler Telegram ---
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await check_authorization(update, context):
-        return
-    user = update.effective_user
-    logging.info(f"Perintah /start diterima dari user: {user.full_name} ({user.id})")
-    await update.message.reply_html(
-        f"Halo {user.mention_html()}! 👋\n"
-        "Saya bot pencatat sales. Ketik /checkin untuk memulai pencatatan kunjungan."
-    )
-    logging.info(f"Pesan balasan /start dikirim ke: {user.full_name}")
-
-async def checkin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not await check_authorization(update, context):
-        return ConversationHandler.END
-    
-    # Pastikan Google Sheet sudah terinisialisasi sebelum memulai percakapan
-    if sheet is None:
-        logging.error(f"Perintah /checkin diterima, tetapi Google Sheet belum terinisialisasi.")
-        await update.message.reply_text("Maaf, bot sedang mengalami masalah koneksi dengan Google Sheet. Mohon coba lagi nanti.")
-        return ConversationHandler.END
-
-    logging.info(f"Perintah /checkin diterima dari user: {update.effective_user.full_name}")
-    await update.message.reply_text(
-        "Baik, mari kita mulai check-in Anda.\n\n"
-        "Silakan ketik **Nama Toko** yang Anda kunjungi:",
-        parse_mode="Markdown"
-    )
-    return NAMA_TOKO
-
-async def nama_toko(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_data = context.user_data
-    user_data['nama_toko'] = update.message.text
-    logging.info(f"Nama Toko diterima: {user_data['nama_toko']} dari {update.effective_user.full_name}")
-    await update.message.reply_text(
-        "Sekarang, silakan ketik **Alamat/Wilayah** toko tersebut (contoh: Denpasar, Kuta, Jl. Teuku Umar):",
-        parse_mode="Markdown"
-    )
-    return ALAMAT_WILAYAH
-
-async def alamat_wilayah(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_data = context.user_data
-    user_data['alamat_wilayah'] = update.message.text
-    logging.info(f"Alamat/Wilayah diterima: {user_data['alamat_wilayah']} dari {update.effective_user.full_name}")
-    keyboard = [[KeyboardButton("Share Lokasi", request_location=True)]]
-    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-    await update.message.reply_text(
-        "Selanjutnya, silakan **Share Lokasi** Anda saat ini melalui Telegram.\n"
-        "Atau, jika tidak bisa share lokasi, kirim saja teks 'skip'.",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
-    )
-    return LOKASI
-
-async def lokasi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_data = context.user_data
-    location_link = "Tidak Tersedia"
-    if update.message.location:
-        lat = update.message.location.latitude
-        lon = update.message.location.longitude
-        # Format yang lebih umum dan disarankan untuk Google Maps
-        location_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}" 
-        logging.info(f"Lokasi diterima: Lat={lat}, Lon={lon} dari {update.effective_user.full_name}")
-    elif update.message.text and update.message.text.lower() == 'skip':
-        logging.info(f"Lokasi dilewati oleh {update.effective_user.full_name}")
+    user_id = update.effective_user.id
+    if user_id in authorized_sales_ids:
+        await update.message.reply_text(f"Halo {update.effective_user.first_name}! 👋 Saya bot pencatat sales harian Anda.")
     else:
-        await update.message.reply_text("Maaf, saya tidak mengenali input lokasi Anda. Silakan kirim 'Share Lokasi' atau ketik 'skip'.")
-        return LOKASI
-    user_data['link_lokasi'] = location_link
-    await update.message.reply_text(
-        "Terima kasih!\nSekarang, masukkan **Jumlah Kunjungan Bulanan** ke toko ini (contoh: 1, 2, 3, dst.):",
-        reply_markup=ReplyKeyboardRemove(),
-        parse_mode="Markdown"
-    )
-    return JUMLAH_KUNJUNGAN
+        await update.message.reply_text("Maaf, Anda tidak memiliki izin untuk menjalankan bot ini.")
+        logger.warning(f"Unauthorized user {user_id} tried to use /start.")
 
-async def jumlah_kunjungan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_data = context.user_data
-    jumlah_kunjungan_text = update.message.text
+async def checkin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if user_id in authorized_sales_ids:
+        # Menunggu balasan dari user
+        await update.message.reply_text("Silakan kirimkan nama Anda dan jumlah sales hari ini (contoh: John Doe, 1000000).")
+    else:
+        await update.message.reply_text("Maaf, Anda tidak memiliki izin untuk melakukan check-in.")
+        logger.warning(f"Unauthorized user {user_id} tried to use /checkin.")
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if user_id not in authorized_sales_ids:
+        await update.message.reply_text("Maaf, Anda tidak memiliki izin untuk menggunakan bot ini.")
+        logger.warning(f"Unauthorized user {user_id} sent message: {update.message.text}")
+        return
+
+    text = update.message.text
     try:
-        jumlah_kunjungan_int = int(jumlah_kunjungan_text)
-        user_data['jumlah_kunjungan'] = jumlah_kunjungan_int
-        logging.info(f"Jumlah Kunjungan diterima: {jumlah_kunjungan_int} dari {update.effective_user.full_name}")
-    except ValueError:
-        await update.message.reply_text("Maaf, jumlah kunjungan harus berupa angka. Silakan coba lagi
+        # Asumsi format: "Nama, Jumlah Sales"
+        parts = text.split(',')
+        if len(parts) != 2:
+            await update.message.reply_text("Format tidak benar. Mohon gunakan format 'Nama Anda, Jumlah Sales' (contoh: John Doe, 1000000).")
+            return
+
+        sales_name = parts[0].strip()
+        sales_amount_str = parts[1].strip()
+
+        try:
+            sales_amount = int(sales_amount_str)
+        except ValueError:
+            await update.message.reply_text("Jumlah sales harus berupa angka. Mohon coba lagi.")
+            return
+
+        # Dapatkan waktu saat ini dalam WIB (UTC+7)
+        wib_tz = timezone(timedelta(hours=7))
+        timestamp = datetime.now(wib_tz).strftime("%Y-%m-%d %H:%M:%S WIB")
+
+        # Catat ke Google Sheets
+        if worksheet:
+            row_data = [timestamp, sales_name, sales_amount]
+            worksheet.append_row(row_data)
+            await update.message.reply_text(f"Terima kasih, {sales_name}! Sales {sales_amount:,} telah dicatat.")
+            logger.info(f"Sales data recorded: {row_data}")
+        else:
+            await update.message.reply_text("Maaf, gagal terhubung ke Google Sheets. Data tidak dapat dicatat.")
+            logger.error("Attempted to record data but Google Sheets was not initialized.")
+
+    except Exception as e:
+        await update.message.reply_text(f"Terjadi kesalahan saat memproses pesan Anda: {e}")
+        logger.error(f"Error processing message from {user_id}: {e}", exc_info=True)
+
+
+# --- Setup Flask ---
+app = Flask(__name__)
+
+@app.route('/telegram', methods=['POST'])
+async def telegram_webhook():
+    logger.info("Menerima pembaruan dari Telegram.")
+    try:
+        # application.process_update() adalah async method, jadi perlu await
+        # application object sudah global, tidak perlu `async with application:` di sini
+        await application.process_update(Update.de_json(request.get_json(force=True), application.bot))
+        return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        logger.error(f"Gagal memproses pembaruan Telegram: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# --- Bagian Startup Aplikasi ---
+# Ini akan dijalankan saat `main.py` dieksekusi oleh Render
+@app.before_serving
+async def startup_event():
+    # Pastikan application terinisialisasi dan webhook disetel sekali
+    try:
+        await application.initialize()
+        await application.bot.set_webhook(url=WEBHOOK_URL)
+        logger.info(f"Inisialisasi bot Telegram selesai. Webhook aktif: {WEBHOOK_URL}")
+    except Exception as e:
+        logger.error(f"Gagal mengatur webhook atau menginisialisasi bot: {e}", exc_info=True)
+        # Jika webhook gagal diatur, bot tidak akan berfungsi dengan baik.
+        # Anda mungkin ingin keluar atau melakukan penanganan kesalahan lainnya.
+
+# Tambahkan handlers setelah application diinisialisasi
+application.add_handler(CommandHandler("start", start_command))
+application.add_handler(CommandHandler("checkin", checkin_command))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 10000))
+    logger.info(f"Aplikasi Flask dimulai di port {port}...")
+    
+    # Untuk Render, Flask biasanya dijalankan oleh Gunicorn (jika Anda memiliki Procfile: web: gunicorn main:app)
+    # atau Werkzeug server yang akan otomatis memulai `app.run()`.
+    # Jadi, kita tidak perlu memanggil app.run() secara eksplisit di sini,
+    # kecuali jika Anda tidak menggunakan Procfile dan ingin Flask langsung berjalan.
+    # Namun, for robustness, kita tetap bisa menjalankannya.
+    # Note: Werkzeug/Flask built-in server TIDAK direkomendasikan untuk produksi.
+    # Render biasanya menangani ini dengan baik jika Procfile diatur.
+    
+    # Jika Anda tidak memiliki Procfile yang mengarahkan ke Gunicorn,
+    # baris di bawah ini akan memulai Flask development server:
+    # app.run(host="0.0.0.0", port=port)
+    # Karena Render secara otomatis menjalankan Flask atau Gunicorn, baris ini seringkali tidak perlu.
+    # Log 'Serving Flask app' dan 'Running on all addresses' menunjukkan Flask sudah dimulai.
+    pass # Biarkan ini kosong karena Render akan menjalankan Flask secara otomatis
