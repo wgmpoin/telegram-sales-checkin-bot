@@ -185,7 +185,7 @@ async def jumlah_kunjungan(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         logging.info(f"Jumlah Kunjungan diterima: {jumlah_kunjungan_int} dari {update.effective_user.full_name}")
     except ValueError:
         await update.message.reply_text("Maaf, jumlah kunjungan harus berupa angka. Silakan coba lagi.")
-        return JUMLAH_KUNJUNGAN # Perbaikan typo JUMLJAH_KUNJUNGAN menjadi JUMLAH_KUNJUNGAN
+        return JUMLAH_KUNJUNGAN
 
     now = datetime.now() 
     tanggal = now.strftime("%Y-%m-%d")
@@ -247,3 +247,94 @@ app = Flask(__name__)
 async def telegram_webhook():
     global application
     if application is None:
+        # Perbaikan indentasi di sini!
+        logging.error("ERROR: Telegram Application belum diinisialisasi.")
+        abort(500) # Internal Server Error
+
+    # Ambil update dari request body
+    update_json = request.get_json(force=True)
+    update = Update.de_json(update_json, application.bot)
+
+    # Proses update secara async
+    async with application: # Pastikan application context manager digunakan
+        await application.process_update(update)
+    
+    return "ok"
+
+# Endpoint default untuk health check Render
+@app.route("/")
+def index():
+    return "Bot Telegram Sales Checkin sedang berjalan! Webhook aktif di /telegram."
+
+# Fungsi untuk menginisialisasi bot Telegram (WEBHOOK MODE)
+async def initialize_telegram_bot():
+    global application
+    telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    webhook_url = os.environ.get("WEBHOOK_URL") # URL dasar dari Render
+
+    if not telegram_token:
+        logging.error("ERROR: Variabel environment 'TELEGRAM_BOT_TOKEN' tidak ditemukan. Bot Telegram tidak dapat dijalankan.")
+        return False
+    if not webhook_url:
+        logging.error("ERROR: Variabel environment 'WEBHOOK_URL' tidak ditemukan. Webhook tidak dapat diatur.")
+        return False
+
+    application = Application.builder().token(telegram_token).build()
+
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("checkin", checkin_command)],
+        states={
+            NAMA_TOKO: [MessageHandler(filters.TEXT & ~filters.COMMAND, nama_toko)],
+            ALAMAT_WILAYAH: [MessageHandler(filters.TEXT & ~filters.COMMAND, alamat_wilayah)],
+            LOKASI: [
+                MessageHandler(filters.LOCATION, lokasi),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, lokasi)
+            ],
+            JUMLAH_KUNJUNGAN: [MessageHandler(filters.TEXT & ~filters.COMMAND, jumlah_kunjungan)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_command)],
+    )
+
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(conv_handler)
+    application.add_handler(CommandHandler("cancel", cancel_command))
+
+    # Hapus webhook lama jika ada dan set webhook baru
+    try:
+        full_webhook_url = f"{webhook_url}/telegram"
+        logging.info(f"Mengatur webhook ke URL: {full_webhook_url}")
+        # Jika Anda ingin verifikasi secret token dari Telegram, tambahkan parameter secret_token
+        # secret_token = os.environ.get("TELEGRAM_WEBHOOK_SECRET") # Anda perlu menambahkan ini juga ke Render
+        # await application.bot.set_webhook(url=full_webhook_url, secret_token=secret_token)
+        await application.bot.set_webhook(url=full_webhook_url) # Versi tanpa secret_token
+        logging.info("Webhook berhasil diatur.")
+        return True
+    except Exception as e:
+        logging.error(f"Gagal mengatur webhook Telegram: {e}")
+        return False
+
+# Fungsi untuk menjalankan Flask dan Bot Telegram
+def main():
+    # Inisialisasi Google Sheets dan Authorized Sales IDs
+    logging.info("Menginisialisasi koneksi Google Sheets...")
+    if not initialize_google_sheets():
+        logging.error("Gagal menginisialisasi Google Sheets. Bot mungkin tidak dapat mencatat data.")
+    
+    logging.info("Memuat daftar authorized sales IDs...")
+    load_authorized_sales_ids()
+
+    # Jalankan inisialisasi bot Telegram secara async dalam event loop baru
+    logging.info("Menginisialisasi bot Telegram (webhook mode)...")
+    try:
+        asyncio.run(initialize_telegram_bot())
+        logging.info("Inisialisasi bot Telegram selesai. Webhook aktif.")
+    except Exception as e:
+        logging.error(f"Gagal menginisialisasi bot Telegram (webhook mode): {e}")
+
+    # Jalankan aplikasi Flask
+    port = int(os.environ.get("PORT", 5000))
+    logging.info(f"Aplikasi Flask dimulai di port {port}...")
+    app.run(host="0.0.0.0", port=port)
+
+if __name__ == "__main__":
+    main()
