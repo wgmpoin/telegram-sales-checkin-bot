@@ -26,7 +26,10 @@ gc = None
 sheet = None
 SPREADSHEET_ID = "1xx1WzEqrp2LYrg-VTgOPwAhk15DigpBodPM9Bm6pbD4" # ID Spreadsheet Anda
 SPREADSHEET_NAME = "Checkin Sales" # Nama file Google Spreadsheet Anda (bukan ID)
-SHEET_TAB_NAME = "Sheet1" # Nama tab sheet di dalam spreadsheet. Ganti jika berbeda!
+SHEET_TAB_NAME = "Checkin" # Nama tab sheet di dalam spreadsheet. Pastikan ini sesuai!
+
+# --- Variabel untuk Authorized Sales ---
+AUTHORIZED_SALES_IDS = set() # Akan diisi dari environment variable
 
 # --- Fungsi untuk Inisialisasi Google Sheets ---
 def initialize_google_sheets():
@@ -54,7 +57,7 @@ def initialize_google_sheets():
         # Menggunakan SPREADSHEET_ID untuk membuka spreadsheet
         spreadsheet = gc.open_by_key(SPREADSHEET_ID)
         
-        # Menggunakan nama tab sheet (misalnya "Sheet1")
+        # Menggunakan nama tab sheet (misalnya "Checkin")
         sheet = spreadsheet.worksheet(SHEET_TAB_NAME)
         
         logging.info(f"Berhasil terhubung ke Google Sheet (ID: '{SPREADSHEET_ID}', Tab: '{SHEET_TAB_NAME}')")
@@ -80,11 +83,40 @@ def initialize_google_sheets():
         logging.error(f"ERROR: Terjadi kesalahan tidak terduga saat menyiapkan Google Sheets: {e}")
         return False
 
+# --- Fungsi untuk Memuat Authorized Sales IDs ---
+def load_authorized_sales_ids():
+    global AUTHORIZED_SALES_IDS
+    authorized_ids_str = os.environ.get("AUTHORIZED_SALES")
+    if authorized_ids_str:
+        try:
+            # Mengubah string '123,456,789' menjadi set {123, 456, 789}
+            AUTHORIZED_SALES_IDS = set(map(int, authorized_ids_str.split(',')))
+            logging.info(f"Authorized sales IDs loaded: {AUTHORIZED_SALES_IDS}")
+        except ValueError:
+            logging.error("ERROR: AUTHORIZED_SALES environment variable contains non-integer values. Please use comma-separated integers.")
+            AUTHORIZED_SALES_IDS = set() # Reset to empty set on error
+    else:
+        logging.warning("WARNING: AUTHORIZED_SALES environment variable is not set. Bot will not restrict access.")
+        # Jika tidak ada AUTHORIZED_SALES, bot akan bisa digunakan siapa saja
+        # Jika Anda ingin bot tidak berfungsi jika tidak ada daftar, exit(1) di sini.
+
+# --- Middleware untuk Memeriksa Otorisasi ---
+async def check_authorization(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in AUTHORIZED_SALES_IDS and AUTHORIZED_SALES_IDS: # Hanya memfilter jika daftar tidak kosong
+        logging.warning(f"Akses ditolak untuk user ID: {user_id} ({update.effective_user.full_name})")
+        await update.message.reply_text("Maaf, Anda tidak memiliki izin untuk menggunakan bot ini.")
+        return False # Tolak akses
+    return True # Izinkan akses
+
 # --- Fungsi-fungsi Handler Bot Telegram ---
 
 # Handler untuk perintah /start
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Mengirim pesan ketika perintah /start dikeluarkan."""
+    if not await check_authorization(update, context):
+        return
+    
     user = update.effective_user
     logging.info(f"Perintah /start diterima dari user: {user.full_name} ({user.id})")
     await update.message.reply_html(
@@ -96,6 +128,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 # Handler untuk perintah /checkin (memulai percakapan)
 async def checkin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Memulai percakapan check-in."""
+    if not await check_authorization(update, context):
+        return ConversationHandler.END # Akhiri percakapan jika tidak diotorisasi
+
     logging.info(f"Perintah /checkin diterima dari user: {update.effective_user.full_name}")
     await update.message.reply_text(
         "Baik, mari kita mulai check-in Anda.\n\n"
@@ -107,6 +142,8 @@ async def checkin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # Handler untuk menerima Nama Toko
 async def nama_toko(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Menyimpan nama toko dan meminta alamat/wilayah."""
+    # Karena ini adalah bagian dari ConversationHandler yang diawali /checkin,
+    # kita tidak perlu check_authorization lagi di sini, karena sudah dilakukan di entry_point.
     user_data = context.user_data
     user_data['nama_toko'] = update.message.text
     logging.info(f"Nama Toko diterima: {user_data['nama_toko']} dari {update.effective_user.full_name}")
@@ -145,7 +182,8 @@ async def lokasi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message.location:
         lat = update.message.location.latitude
         lon = update.message.location.longitude
-        location_link = f"https://www.google.com/maps?q={lat},{lon}"
+        # Format link Google Maps yang lebih standar
+        location_link = f"https://maps.google.com/maps?q={lat},{lon}"
         logging.info(f"Lokasi diterima: Lat={lat}, Lon={lon} dari {update.effective_user.full_name}")
     elif update.message.text and update.message.text.lower() == 'skip':
         logging.info(f"Lokasi dilewati oleh {update.effective_user.full_name}")
@@ -176,8 +214,11 @@ async def jumlah_kunjungan(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("Maaf, jumlah kunjungan harus berupa angka. Silakan coba lagi.")
         return JUMLAH_KUNJUNGAN # Tetap di state JUMLAH_KUNJUNGAN jika input tidak valid
 
-    # Mendapatkan tanggal dan waktu saat ini
-    now = datetime.now()
+    # Mendapatkan tanggal dan waktu saat ini (WITA)
+    # Karena Render.com biasanya UTC, kita perlu menyesuaikan timezone jika ingin WITA di log/sheet
+    # Untuk kesederhanaan, kita akan biarkan waktu server (UTC) dulu atau pastikan Render di WITA.
+    # Namun, karena ini untuk spreadsheet, kita akan gunakan waktu server dan berasumsi sudah diatur/dikonversi di sheet.
+    now = datetime.now() 
     tanggal = now.strftime("%Y-%m-%d") # Format YYYY-MM-DD
     waktu = now.strftime("%H:%M:%S")    # Format HH:MM:SS
 
@@ -267,16 +308,18 @@ async def run_bot():
     application.add_handler(CommandHandler("cancel", cancel_command)) # Handler cancel global
 
     logging.info("Bot Telegram mulai polling untuk update...")
-    # Menggunakan long-polling. Untuk deployment di Render yang lebih stabil,
-    # pertimbangkan menggunakan webhooks jika diperlukan.
     await application.run_polling(poll_interval=3.0, timeout=30)
 
 
 if __name__ == "__main__":
-    # Inisialisasi Google Sheets saat aplikasi dimulai
+    # Inisialisasi Google Sheets dan Authorized Sales IDs saat aplikasi dimulai
+    logging.info("Menginisialisasi koneksi Google Sheets...")
     if not initialize_google_sheets():
         logging.error("Gagal menginisialisasi Google Sheets. Bot mungkin tidak dapat mencatat data.")
         # Tetap lanjutkan untuk Flask agar Render tidak error, tapi fungsionalitas Sheets tidak akan jalan
+    
+    logging.info("Memuat daftar authorized sales IDs...")
+    load_authorized_sales_ids()
 
     # Jalankan bot Telegram di background menggunakan asyncio task
     import asyncio
