@@ -6,7 +6,8 @@ from datetime import datetime
 from flask import Flask
 from google.oauth2 import service_account
 import gspread
-import asyncio # Tambahkan import asyncio
+import asyncio
+import threading # Tambahkan import threading
 
 # Impor modul Telegram Bot
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
@@ -98,13 +99,14 @@ def load_authorized_sales_ids():
             AUTHORIZED_SALES_IDS = set() # Reset to empty set on error
     else:
         logging.warning("WARNING: AUTHORIZED_SALES environment variable is not set. Bot will not restrict access.")
-        # Jika tidak ada AUTHORIZED_SALES, bot akan bisa digunakan siapa saja
-        # Jika Anda ingin bot tidak berfungsi jika tidak ada daftar, exit(1) di sini.
+        # Jika Anda ingin bot TIDAK berfungsi jika tidak ada daftar AUTHORIZED_SALES, Anda bisa exit(1) di sini:
+        # sys.exit(1)
 
 # --- Middleware untuk Memeriksa Otorisasi ---
 async def check_authorization(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if user_id not in AUTHORIZED_SALES_IDS and AUTHORIZED_SALES_IDS: # Hanya memfilter jika daftar tidak kosong
+    # Jika AUTHORIZED_SALES_IDS tidak kosong DAN user_id tidak ada di dalamnya
+    if AUTHORIZED_SALES_IDS and user_id not in AUTHORIZED_SALES_IDS:
         logging.warning(f"Akses ditolak untuk user ID: {user_id} ({update.effective_user.full_name})")
         await update.message.reply_text("Maaf, Anda tidak memiliki izin untuk menggunakan bot ini.")
         return False # Tolak akses
@@ -143,8 +145,6 @@ async def checkin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # Handler untuk menerima Nama Toko
 async def nama_toko(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Menyimpan nama toko dan meminta alamat/wilayah."""
-    # Karena ini adalah bagian dari ConversationHandler yang diawali /checkin,
-    # kita tidak perlu check_authorization lagi di sini, karena sudah dilakukan di entry_point.
     user_data = context.user_data
     user_data['nama_toko'] = update.message.text
     logging.info(f"Nama Toko diterima: {user_data['nama_toko']} dari {update.effective_user.full_name}")
@@ -184,7 +184,7 @@ async def lokasi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         lat = update.message.location.latitude
         lon = update.message.location.longitude
         # Format link Google Maps yang lebih standar
-        location_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+        location_link = f"http://maps.google.com/maps?q={lat},{lon}" # Menggunakan format yang lebih umum
         logging.info(f"Lokasi diterima: Lat={lat}, Lon={lon} dari {update.effective_user.full_name}")
     elif update.message.text and update.message.text.lower() == 'skip':
         logging.info(f"Lokasi dilewati oleh {update.effective_user.full_name}")
@@ -215,21 +215,14 @@ async def jumlah_kunjungan(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("Maaf, jumlah kunjungan harus berupa angka. Silakan coba lagi.")
         return JUMLAH_KUNJUNGAN # Tetap di state JUMLAH_KUNJUNGAN jika input tidak valid
 
-    # Mendapatkan tanggal dan waktu saat ini (WITA)
-    # Gunakan pytz untuk timezone yang akurat
-    # import pytz # Anda perlu menambahkan 'pytz' ke requirements.txt jika menggunakannya
-    # bali_tz = pytz.timezone('Asia/Makassar') # WITA
-    # now = datetime.now(bali_tz)
-    
-    # Untuk kesederhanaan saat ini, kita gunakan waktu server Render (UTC)
-    # Jika ingin WITA, Anda bisa menambahkan `pytz` ke `requirements.txt` dan uncomment kode di atas
-    now = datetime.now() # Ini akan menggunakan waktu UTC di Render.com
+    now = datetime.now() 
     tanggal = now.strftime("%Y-%m-%d") # Format YYYY-MM-DD
     waktu = now.strftime("%H:%M:%S")    # Format HH:MM:SS
 
     # Mengumpulkan semua data
+    # Pastikan urutan ini sesuai dengan kolom di Google Sheet Anda
     row_data = [
-        update.effective_user.full_name, # Nama sales
+        update.effective_user.full_name, # Nama Sales
         update.effective_user.id,        # ID Sales
         user_data.get('nama_toko', ''),
         user_data.get('alamat_wilayah', ''),
@@ -288,7 +281,7 @@ def index():
     return "Bot Telegram Sales Checkin sedang berjalan!"
 
 # Fungsi utama untuk menjalankan bot Telegram (dengan Flask)
-async def run_bot_telegram(): # Ganti nama fungsi untuk menghindari konflik dengan fungsi Flask
+async def run_bot_telegram():
     """Menjalankan bot Telegram."""
     telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not telegram_token:
@@ -317,9 +310,25 @@ async def run_bot_telegram(): # Ganti nama fungsi untuk menghindari konflik deng
     application.add_handler(CommandHandler("cancel", cancel_command)) # Handler cancel global
 
     logging.info("Bot Telegram mulai polling untuk update...")
-    # Gunakan application.run_polling() secara langsung di dalam asyncio.run
     await application.run_polling(poll_interval=3.0, timeout=30)
 
 
 if __name__ == "__main__":
-    # Inis
+    # Inisialisasi Google Sheets dan Authorized Sales IDs saat aplikasi dimulai
+    logging.info("Menginisialisasi koneksi Google Sheets...")
+    if not initialize_google_sheets():
+        logging.error("Gagal menginisialisasi Google Sheets. Bot mungkin tidak dapat mencatat data.")
+        # Tetap lanjutkan untuk Flask agar Render tidak error, tapi fungsionalitas Sheets tidak akan jalan
+    
+    logging.info("Memuat daftar authorized sales IDs...")
+    load_authorized_sales_ids()
+
+    # Membuat dan menjalankan thread untuk bot Telegram
+    telegram_thread = threading.Thread(target=lambda: asyncio.run(run_bot_telegram()))
+    telegram_thread.start()
+    logging.info("Bot Telegram berhasil dijalankan di thread terpisah.")
+
+    # Jalankan aplikasi Flask di thread utama
+    port = int(os.environ.get("PORT", 5000))
+    logging.info(f"Aplikasi Flask dimulai di port {port}...")
+    app.run(host="0.0.0.0", port=port)
