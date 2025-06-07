@@ -3,16 +3,10 @@ import json
 import logging
 import base64
 from datetime import datetime
-from flask import Flask, request, abort # Tambahkan request, abort
+from flask import Flask, request, abort
 from google.oauth2 import service_account
 import gspread
 import asyncio
-
-# Impor modul Telegram Bot
-from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import (
-    Application, CommandHandler, MessageHandler, ContextTypes, ConversationHandler, filters
-)
 
 # Konfigurasi logging agar lebih mudah melihat pesan di log Render
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -26,9 +20,10 @@ NAMA_TOKO, ALAMAT_WILAYAH, LOKASI, JUMLAH_KUNJUNGAN = range(4)
 gc = None
 sheet = None
 # PASTIKAN SPREADSHEET_ID INI SESUAI DENGAN ID GOOGLE SHEET ANDA
-SPREADSHEET_ID = "1xx1WzEqrp2LYrg-VTpOPQAhk15DigpBodPM9Bm6pbD4"
+# Contoh: "1xx1WzEqrp2LYrg-VTpOPQAhk15DigpBodPM9Bm6pbD4"
+SPREADSHEET_ID = os.environ.get("GOOGLE_SHEET_ID") # Mengambil dari Environment Variable
 # PASTIKAN SHEET_TAB_NAME INI SESUAI DENGAN NAMA TAB DI GOOGLE SHEET ANDA (contoh: "Checkin")
-SHEET_TAB_NAME = "Checkin"
+SHEET_TAB_NAME = os.environ.get("GOOGLE_SHEET_TAB_NAME", "Checkin") # Mengambil dari Environment Variable, default "Checkin"
 
 # --- Variabel untuk Authorized Sales ---
 AUTHORIZED_SALES_IDS = set() # Akan diisi dari environment variable
@@ -42,7 +37,11 @@ def initialize_google_sheets():
     creds_base64 = os.environ.get("GCP_CREDENTIALS_BASE64")
 
     if not creds_base64:
-        logging.error("ERROR: Variabel environment 'GCP_CREDENTIALS_BASE64' tidak ditemukan atau kosong.")
+        logging.error("ERROR: Variabel environment 'GCP_CREDENTIALS_BASE64' tidak ditemukan atau kosong. Tidak dapat terhubung ke Google Sheets.")
+        return False
+    
+    if not SPREADSHEET_ID:
+        logging.error("ERROR: Variabel environment 'GOOGLE_SHEET_ID' tidak ditemukan atau kosong. Tidak dapat terhubung ke Google Sheets.")
         return False
 
     try:
@@ -72,10 +71,10 @@ def initialize_google_sheets():
         logging.error(f"ERROR: Gagal parsing JSON. Error: {e}")
         return False
     except gspread.exceptions.SpreadsheetNotFound:
-        logging.error("ERROR: Spreadsheet tidak ditemukan. Pastikan Spreadsheet ID sudah benar dan akun layanan memiliki akses ke spreadsheet.")
+        logging.error("ERROR: Spreadsheet tidak ditemukan. Pastikan Google Sheet ID sudah benar dan akun layanan memiliki akses ke spreadsheet.")
         return False
     except gspread.exceptions.WorksheetNotFound:
-        logging.error(f"ERROR: Tab sheet '{SHEET_TAB_NAME}' tidak ditemukan dalam spreadsheet. Pastikan nama tab benar.")
+        logging.error(f"ERROR: Tab sheet '{SHEET_TAB_NAME}' tidak ditemukan dalam spreadsheet. Pastikan nama tab benar dan case-sensitive.")
         return False
     except gspread.exceptions.APIError as e:
         logging.error(f"ERROR: Terjadi kesalahan API Google Sheets/Drive. Pesan: {e}")
@@ -123,6 +122,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def checkin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await check_authorization(update, context):
         return ConversationHandler.END
+    
+    # Pastikan Google Sheet sudah terinisialisasi sebelum memulai percakapan
+    if sheet is None:
+        logging.error(f"Perintah /checkin diterima, tetapi Google Sheet belum terinisialisasi.")
+        await update.message.reply_text("Maaf, bot sedang mengalami masalah koneksi dengan Google Sheet. Mohon coba lagi nanti.")
+        return ConversationHandler.END
+
     logging.info(f"Perintah /checkin diterima dari user: {update.effective_user.full_name}")
     await update.message.reply_text(
         "Baik, mari kita mulai check-in Anda.\n\n"
@@ -161,7 +167,8 @@ async def lokasi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message.location:
         lat = update.message.location.latitude
         lon = update.message.location.longitude
-        location_link = f"http://maps.google.com/maps?q={lat},{lon}" # Format yang lebih umum dan disarankan
+        # Format yang lebih umum dan disarankan untuk Google Maps
+        location_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}" 
         logging.info(f"Lokasi diterima: Lat={lat}, Lon={lon} dari {update.effective_user.full_name}")
     elif update.message.text and update.message.text.lower() == 'skip':
         logging.info(f"Lokasi dilewati oleh {update.effective_user.full_name}")
@@ -184,157 +191,4 @@ async def jumlah_kunjungan(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         user_data['jumlah_kunjungan'] = jumlah_kunjungan_int
         logging.info(f"Jumlah Kunjungan diterima: {jumlah_kunjungan_int} dari {update.effective_user.full_name}")
     except ValueError:
-        await update.message.reply_text("Maaf, jumlah kunjungan harus berupa angka. Silakan coba lagi.")
-        return JUMLAH_KUNJUNGAN
-
-    now = datetime.now() 
-    tanggal = now.strftime("%Y-%m-%d")
-    waktu = now.strftime("%H:%M:%S")
-
-    # Mengumpulkan semua data
-    # Pastikan urutan ini sesuai dengan kolom di Google Sheet Anda
-    row_data = [
-        update.effective_user.full_name, # Nama Sales
-        update.effective_user.id,        # ID Sales
-        user_data.get('nama_toko', ''),
-        user_data.get('alamat_wilayah', ''),
-        tanggal,
-        waktu,
-        user_data.get('link_lokasi', ''),
-        user_data.get('jumlah_kunjungan', '')
-    ]
-    try:
-        if sheet:
-            sheet.append_row(row_data)
-            logging.info(f"Data berhasil dicatat ke spreadsheet: {row_data}")
-            await update.message.reply_text(
-                "✅ Check-in berhasil dicatat!\n"
-                f"Nama Sales: *{update.effective_user.full_name}*\n"
-                f"ID Sales: *{update.effective_user.id}*\n"
-                f"Nama Toko: *{user_data['nama_toko']}*\n"
-                f"Alamat/Wilayah: *{user_data['alamat_wilayah']}*\n"
-                f"Link Lokasi: {user_data['link_lokasi']}\n"
-                f"Jumlah Kunjungan: *{user_data['jumlah_kunjungan']}*\n"
-                f"Tanggal/Waktu: *{tanggal} {waktu}*\n\n"
-                "Terima kasih atas check-in Anda!",
-                parse_mode="Markdown"
-            )
-        else:
-            logging.error("Koneksi Google Sheet belum terinisialisasi. Tidak dapat mencatat data.")
-            await update.message.reply_text("Maaf, ada masalah dalam menghubungkan ke Google Sheet. Mohon coba lagi nanti.")
-    except Exception as e:
-        logging.error(f"Gagal mencatat data ke spreadsheet: {e}")
-        await update.message.reply_text("Maaf, terjadi kesalahan saat mencoba mencatat data Anda ke spreadsheet. Silakan coba lagi.")
-    context.user_data.clear()
-    return ConversationHandler.END
-
-async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    logging.info(f"Perintah /cancel diterima dari user: {update.effective_user.full_name}")
-    user_data = context.user_data
-    user_data.clear()
-    await update.message.reply_text(
-        "Pencatatan dibatalkan. Kapan-kapan kita bisa coba lagi! 👋",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    return ConversationHandler.END
-
-
-# --- Aplikasi Flask (Web Server untuk Render) ---
-app = Flask(__name__)
-
-# Endpoint untuk menerima update webhook dari Telegram
-@app.route("/telegram", methods=["POST"])
-async def telegram_webhook():
-    global application
-    if application is None:
-        # Perbaikan indentasi di sini!
-        logging.error("ERROR: Telegram Application belum diinisialisasi.")
-        abort(500) # Internal Server Error
-
-    # Ambil update dari request body
-    update_json = request.get_json(force=True)
-    update = Update.de_json(update_json, application.bot)
-
-    # Proses update secara async
-    async with application: # Pastikan application context manager digunakan
-        await application.process_update(update)
-    
-    return "ok"
-
-# Endpoint default untuk health check Render
-@app.route("/")
-def index():
-    return "Bot Telegram Sales Checkin sedang berjalan! Webhook aktif di /telegram."
-
-# Fungsi untuk menginisialisasi bot Telegram (WEBHOOK MODE)
-async def initialize_telegram_bot():
-    global application
-    telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    webhook_url = os.environ.get("WEBHOOK_URL") # URL dasar dari Render
-
-    if not telegram_token:
-        logging.error("ERROR: Variabel environment 'TELEGRAM_BOT_TOKEN' tidak ditemukan. Bot Telegram tidak dapat dijalankan.")
-        return False
-    if not webhook_url:
-        logging.error("ERROR: Variabel environment 'WEBHOOK_URL' tidak ditemukan. Webhook tidak dapat diatur.")
-        return False
-
-    application = Application.builder().token(telegram_token).build()
-
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("checkin", checkin_command)],
-        states={
-            NAMA_TOKO: [MessageHandler(filters.TEXT & ~filters.COMMAND, nama_toko)],
-            ALAMAT_WILAYAH: [MessageHandler(filters.TEXT & ~filters.COMMAND, alamat_wilayah)],
-            LOKASI: [
-                MessageHandler(filters.LOCATION, lokasi),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, lokasi)
-            ],
-            JUMLAH_KUNJUNGAN: [MessageHandler(filters.TEXT & ~filters.COMMAND, jumlah_kunjungan)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_command)],
-    )
-
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(conv_handler)
-    application.add_handler(CommandHandler("cancel", cancel_command))
-
-    # Hapus webhook lama jika ada dan set webhook baru
-    try:
-        full_webhook_url = f"{webhook_url}/telegram"
-        logging.info(f"Mengatur webhook ke URL: {full_webhook_url}")
-        # Jika Anda ingin verifikasi secret token dari Telegram, tambahkan parameter secret_token
-        # secret_token = os.environ.get("TELEGRAM_WEBHOOK_SECRET") # Anda perlu menambahkan ini juga ke Render
-        # await application.bot.set_webhook(url=full_webhook_url, secret_token=secret_token)
-        await application.bot.set_webhook(url=full_webhook_url) # Versi tanpa secret_token
-        logging.info("Webhook berhasil diatur.")
-        return True
-    except Exception as e:
-        logging.error(f"Gagal mengatur webhook Telegram: {e}")
-        return False
-
-# Fungsi untuk menjalankan Flask dan Bot Telegram
-def main():
-    # Inisialisasi Google Sheets dan Authorized Sales IDs
-    logging.info("Menginisialisasi koneksi Google Sheets...")
-    if not initialize_google_sheets():
-        logging.error("Gagal menginisialisasi Google Sheets. Bot mungkin tidak dapat mencatat data.")
-    
-    logging.info("Memuat daftar authorized sales IDs...")
-    load_authorized_sales_ids()
-
-    # Jalankan inisialisasi bot Telegram secara async dalam event loop baru
-    logging.info("Menginisialisasi bot Telegram (webhook mode)...")
-    try:
-        asyncio.run(initialize_telegram_bot())
-        logging.info("Inisialisasi bot Telegram selesai. Webhook aktif.")
-    except Exception as e:
-        logging.error(f"Gagal menginisialisasi bot Telegram (webhook mode): {e}")
-
-    # Jalankan aplikasi Flask
-    port = int(os.environ.get("PORT", 5000))
-    logging.info(f"Aplikasi Flask dimulai di port {port}...")
-    app.run(host="0.0.0.0", port=port)
-
-if __name__ == "__main__":
-    main()
+        await update.message.reply_text("Maaf, jumlah kunjungan harus berupa angka. Silakan coba lagi
