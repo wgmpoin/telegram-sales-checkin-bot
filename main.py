@@ -2,76 +2,233 @@ import os
 import json
 import logging
 import base64
+from datetime import datetime
 from flask import Flask
 from google.oauth2 import service_account
 import gspread
+
+# Impor modul Telegram Bot
+from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler, ContextTypes, ConversationHandler, filters
+)
 
 # Konfigurasi logging agar lebih mudah melihat pesan di log Render
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 logging.info("Memulai proses deployment bot...")
 
-# --- Bagian Kredensial GCP ---
-creds_base64 = os.environ.get("GCP_CREDENTIALS_BASE64")
+# --- States untuk ConversationHandler ---
+NAMA_TOKO, ALAMAT_WILAYAH, LOKASI, JUMLAH_KUNJUNGAN = range(4)
 
-if not creds_base64:
-    logging.error("ERROR: Variabel environment 'GCP_CREDENTIALS_BASE64' tidak ditemukan atau kosong. Pastikan sudah diatur di Render.")
-    exit(1)
+# --- Variabel Global untuk gspread ---
+gc = None
+sheet = None
+SPREADSHEET_ID = "1xx1WzEqrp2LYrg-VTgOPwAhk15DigpBodPM9Bm6pbD4" # ID Spreadsheet Anda
+SPREADSHEET_NAME = "Checkin Sales" # Nama file Google Spreadsheet Anda (bukan ID)
+SHEET_TAB_NAME = "Sheet1" # Nama tab sheet di dalam spreadsheet. Ganti jika berbeda!
 
-try:
-    creds_decoded = base64.b64decode(creds_base64).decode('utf-8')
-    logging.info("GCP_CREDENTIALS_BASE64 berhasil didekode dari Base64.")
+# --- Fungsi untuk Inisialisasi Google Sheets ---
+def initialize_google_sheets():
+    global gc, sheet
+    creds_base64 = os.environ.get("GCP_CREDENTIALS_BASE64")
 
-    creds_dict = json.loads(creds_decoded)
-    logging.info("GCP_CREDENTIALS_BASE64 berhasil diparse sebagai JSON.")
+    if not creds_base64:
+        logging.error("ERROR: Variabel environment 'GCP_CREDENTIALS_BASE64' tidak ditemukan atau kosong.")
+        return False
 
-    if "private_key" in creds_dict:
-        # Menangani karakter newline yang di-escape dari string Base64
-        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-        logging.info("Mengganti '\\n' dengan '\\n' di private_key.")
+    try:
+        creds_decoded = base64.b64decode(creds_base64).decode('utf-8')
+        creds_dict = json.loads(creds_decoded)
+
+        if "private_key" in creds_dict:
+            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        credentials = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        gc = gspread.authorize(credentials)
+
+        # Menggunakan SPREADSHEET_ID untuk membuka spreadsheet
+        spreadsheet = gc.open_by_key(SPREADSHEET_ID)
+        
+        # Menggunakan nama tab sheet (misalnya "Sheet1")
+        sheet = spreadsheet.worksheet(SHEET_TAB_NAME)
+        
+        logging.info(f"Berhasil terhubung ke Google Sheet (ID: '{SPREADSHEET_ID}', Tab: '{SHEET_TAB_NAME}')")
+        return True
+
+    except base64.binascii.Error as e:
+        logging.error(f"ERROR: Gagal dekode Base64. Error: {e}")
+        return False
+    except json.JSONDecodeError as e:
+        logging.error(f"ERROR: Gagal parsing JSON. Error: {e}")
+        return False
+    except gspread.exceptions.SpreadsheetNotFound:
+        logging.error("ERROR: Spreadsheet tidak ditemukan. Pastikan Spreadsheet ID sudah benar dan akun layanan memiliki akses ke spreadsheet.")
+        return False
+    except gspread.exceptions.WorksheetNotFound:
+        logging.error(f"ERROR: Tab sheet '{SHEET_TAB_NAME}' tidak ditemukan dalam spreadsheet. Pastikan nama tab benar.")
+        return False
+    except gspread.exceptions.APIError as e:
+        logging.error(f"ERROR: Terjadi kesalahan API Google Sheets/Drive. Pesan: {e}")
+        logging.error("Penyebab mungkin: API belum diaktifkan, izin akun layanan tidak cukup, atau ada masalah dengan koneksi.")
+        return False
+    except Exception as e:
+        logging.error(f"ERROR: Terjadi kesalahan tidak terduga saat menyiapkan Google Sheets: {e}")
+        return False
+
+# --- Fungsi-fungsi Handler Bot Telegram ---
+
+# Handler untuk perintah /start
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Mengirim pesan ketika perintah /start dikeluarkan."""
+    user = update.effective_user
+    logging.info(f"Perintah /start diterima dari user: {user.full_name} ({user.id})")
+    await update.message.reply_html(
+        f"Halo {user.mention_html()}! 👋\n"
+        "Saya bot pencatat sales. Ketik /checkin untuk memulai pencatatan kunjungan."
+    )
+    logging.info(f"Pesan balasan /start dikirim ke: {user.full_name}")
+
+# Handler untuk perintah /checkin (memulai percakapan)
+async def checkin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Memulai percakapan check-in."""
+    logging.info(f"Perintah /checkin diterima dari user: {update.effective_user.full_name}")
+    await update.message.reply_text(
+        "Baik, mari kita mulai check-in Anda.\n\n"
+        "Silakan ketik **Nama Toko** yang Anda kunjungi:",
+        parse_mode="Markdown"
+    )
+    return NAMA_TOKO
+
+# Handler untuk menerima Nama Toko
+async def nama_toko(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Menyimpan nama toko dan meminta alamat/wilayah."""
+    user_data = context.user_data
+    user_data['nama_toko'] = update.message.text
+    logging.info(f"Nama Toko diterima: {user_data['nama_toko']} dari {update.effective_user.full_name}")
+    
+    await update.message.reply_text(
+        "Sekarang, silakan ketik **Alamat/Wilayah** toko tersebut (contoh: Denpasar, Kuta, Jl. Teuku Umar):",
+        parse_mode="Markdown"
+    )
+    return ALAMAT_WILAYAH
+
+# Handler untuk menerima Alamat/Wilayah
+async def alamat_wilayah(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Menyimpan alamat/wilayah dan meminta lokasi."""
+    user_data = context.user_data
+    user_data['alamat_wilayah'] = update.message.text
+    logging.info(f"Alamat/Wilayah diterima: {user_data['alamat_wilayah']} dari {update.effective_user.full_name}")
+
+    # Tombol untuk share lokasi
+    keyboard = [[KeyboardButton("Share Lokasi", request_location=True)]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+
+    await update.message.reply_text(
+        "Selanjutnya, silakan **Share Lokasi** Anda saat ini melalui Telegram.\n"
+        "Atau, jika tidak bisa share lokasi, kirim saja teks 'skip'.",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+    return LOKASI
+
+# Handler untuk menerima Lokasi (atau 'skip')
+async def lokasi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Menyimpan link lokasi dan meminta jumlah kunjungan."""
+    user_data = context.user_data
+    location_link = "Tidak Tersedia"
+
+    if update.message.location:
+        lat = update.message.location.latitude
+        lon = update.message.location.longitude
+        location_link = f"https://www.google.com/maps?q={lat},{lon}"
+        logging.info(f"Lokasi diterima: Lat={lat}, Lon={lon} dari {update.effective_user.full_name}")
+    elif update.message.text and update.message.text.lower() == 'skip':
+        logging.info(f"Lokasi dilewati oleh {update.effective_user.full_name}")
     else:
-        logging.warning("Kunci privat tidak ditemukan dalam kamus kredensial.")
+        await update.message.reply_text("Maaf, saya tidak mengenali input lokasi Anda. Silakan kirim 'Share Lokasi' atau ketik 'skip'.")
+        return LOKASI # Tetap di state LOKASI jika input tidak valid
 
-    # Definisikan cakupan (scopes) untuk Google Sheets API dan Google Drive API
-    # KEDUA SCOPE INI SANGAT PENTING untuk gspread
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets", # Untuk Google Sheets
-        "https://www.googleapis.com/auth/drive"         # Untuk Google Drive (dibutuhkan gspread)
+    user_data['link_lokasi'] = location_link
+
+    await update.message.reply_text(
+        "Terima kasih!\nSekarang, masukkan **Jumlah Kunjungan Bulanan** ke toko ini (contoh: 1, 2, 3, dst.):",
+        reply_markup=ReplyKeyboardRemove(), # Hapus keyboard lokasi
+        parse_mode="Markdown"
+    )
+    return JUMLAH_KUNJUNGAN
+
+# Handler untuk menerima Jumlah Kunjungan dan menyimpan ke Spreadsheet
+async def jumlah_kunjungan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Menyimpan jumlah kunjungan dan mencatat semua data ke spreadsheet."""
+    user_data = context.user_data
+    jumlah_kunjungan_text = update.message.text
+
+    try:
+        jumlah_kunjungan_int = int(jumlah_kunjungan_text)
+        user_data['jumlah_kunjungan'] = jumlah_kunjungan_int
+        logging.info(f"Jumlah Kunjungan diterima: {jumlah_kunjungan_int} dari {update.effective_user.full_name}")
+    except ValueError:
+        await update.message.reply_text("Maaf, jumlah kunjungan harus berupa angka. Silakan coba lagi.")
+        return JUMLAH_KUNJUNGAN # Tetap di state JUMLAH_KUNJUNGAN jika input tidak valid
+
+    # Mendapatkan tanggal dan waktu saat ini
+    now = datetime.now()
+    tanggal = now.strftime("%Y-%m-%d") # Format YYYY-MM-DD
+    waktu = now.strftime("%H:%M:%S")    # Format HH:MM:SS
+
+    # Mengumpulkan semua data
+    row_data = [
+        user_data.get('nama_toko', ''),
+        user_data.get('alamat_wilayah', ''),
+        tanggal,
+        waktu,
+        user_data.get('link_lokasi', ''),
+        user_data.get('jumlah_kunjungan', '')
     ]
-    credentials = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
-    logging.info("Kredensial akun layanan Google berhasil dimuat.")
 
-    # Otentikasi dan koneksi ke Google Sheets
-    gc = gspread.authorize(credentials)
+    # Menulis ke Google Spreadsheet
+    try:
+        if sheet:
+            sheet.append_row(row_data)
+            logging.info(f"Data berhasil dicatat ke spreadsheet: {row_data}")
+            await update.message.reply_text(
+                "✅ Check-in berhasil dicatat!\n"
+                f"Nama Toko: *{user_data['nama_toko']}*\n"
+                f"Alamat/Wilayah: *{user_data['alamat_wilayah']}*\n"
+                f"Link Lokasi: {user_data['link_lokasi']}\n"
+                f"Jumlah Kunjungan: *{user_data['jumlah_kunjungan']}*\n"
+                f"Tanggal/Waktu: *{tanggal} {waktu}*\n\n"
+                "Terima kasih atas check-in Anda!",
+                parse_mode="Markdown"
+            )
+        else:
+            logging.error("Koneksi Google Sheet belum terinisialisasi. Tidak dapat mencatat data.")
+            await update.message.reply_text("Maaf, ada masalah dalam menghubungkan ke Google Sheet. Mohon coba lagi nanti.")
+    except Exception as e:
+        logging.error(f"Gagal mencatat data ke spreadsheet: {e}")
+        await update.message.reply_text("Maaf, terjadi kesalahan saat mencoba mencatat data Anda ke spreadsheet. Silakan coba lagi.")
 
-    # --- PENTING: Spreadsheet ID Anda dari link yang diberikan ---
-    SPREADSHEET_ID = "1xx1WzEqrp2LYrg-VTgOPwAhk15DigpBodPM9Bm6pbD4"
-    
-    # --- PENTING: Pastikan nama sheet pertama benar. Umumnya 'sheet1'
-    # Jika sheet pertama Anda bernama "Data" (bukan "Sheet1"),
-    # ubah '.sheet1' menjadi `.worksheet("Data")`
-    sheet = gc.open_by_key(SPREADSHEET_ID).sheet1
-    
-    logging.info(f"Berhasil terhubung ke Google Sheet dengan ID: '{SPREADSHEET_ID}' dan nama Sheet: '{sheet.title}'")
+    # Akhiri percakapan
+    context.user_data.clear() # Hapus data pengguna
+    return ConversationHandler.END
 
-except base64.binascii.Error as e:
-    logging.error(f"ERROR: Gagal dekode Base64. Pastikan nilai GCP_CREDENTIALS_BASE64 adalah string Base64 yang valid. Error: {e}")
-    exit(1)
-except json.JSONDecodeError as e:
-    logging.error(f"ERROR: Gagal parsing JSON. Pastikan nilai GCP_CREDENTIALS_BASE64 (setelah didekode) adalah JSON yang valid. Error: {e}")
-    exit(1)
-except gspread.exceptions.SpreadsheetNotFound:
-    logging.error("ERROR: Spreadsheet tidak ditemukan. Pastikan Spreadsheet ID sudah benar dan akun layanan memiliki akses.")
-    exit(1)
-except gspread.exceptions.APIError as e:
-    logging.error(f"ERROR: Terjadi kesalahan API Google Sheets/Drive. Pesan: {e}")
-    logging.error("Penyebab mungkin: API belum diaktifkan, izin akun layanan tidak cukup, atau ada masalah dengan koneksi.")
-    logging.error("Periksa pesan error detil dan pastikan semua API yang dibutuhkan sudah aktif di Google Cloud.")
-    exit(1)
-except Exception as e:
-    logging.error(f"ERROR: Terjadi kesalahan tidak terduga saat menyiapkan Google Sheets: {e}")
-    logging.error(f"Detil error: {e.args[0] if e.args else 'Tidak ada detil tambahan'}")
-    exit(1)
+# Handler untuk membatalkan percakapan
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Membatalkan dan mengakhiri percakapan."""
+    logging.info(f"Perintah /cancel diterima dari user: {update.effective_user.full_name}")
+    user_data = context.user_data
+    user_data.clear() # Hapus data pengguna
+    await update.message.reply_text(
+        "Pencatatan dibatalkan. Kapan-kapan kita bisa coba lagi! 👋",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return ConversationHandler.END
+
 
 # --- Aplikasi Flask Sederhana (Web Server untuk Render) ---
 app = Flask(__name__)
@@ -80,7 +237,54 @@ app = Flask(__name__)
 def index():
     return "Bot Telegram Sales Checkin sedang berjalan!"
 
+# Fungsi utama untuk menjalankan bot Telegram (dengan Flask)
+async def run_bot():
+    """Menjalankan bot Telegram."""
+    telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not telegram_token:
+        logging.error("ERROR: Variabel environment 'TELEGRAM_BOT_TOKEN' tidak ditemukan. Bot Telegram tidak dapat dijalankan.")
+        return
+
+    application = Application.builder().token(telegram_token).build()
+
+    # Buat ConversationHandler untuk alur check-in
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("checkin", checkin_command)],
+        states={
+            NAMA_TOKO: [MessageHandler(filters.TEXT & ~filters.COMMAND, nama_toko)],
+            ALAMAT_WILAYAH: [MessageHandler(filters.TEXT & ~filters.COMMAND, alamat_wilayah)],
+            LOKASI: [
+                MessageHandler(filters.LOCATION, lokasi),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, lokasi) # Untuk opsi 'skip'
+            ],
+            JUMLAH_KUNJUNGAN: [MessageHandler(filters.TEXT & ~filters.COMMAND, jumlah_kunjungan)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_command)],
+    )
+
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(conv_handler)
+    application.add_handler(CommandHandler("cancel", cancel_command)) # Handler cancel global
+
+    logging.info("Bot Telegram mulai polling untuk update...")
+    # Menggunakan long-polling. Untuk deployment di Render yang lebih stabil,
+    # pertimbangkan menggunakan webhooks jika diperlukan.
+    await application.run_polling(poll_interval=3.0, timeout=30)
+
+
 if __name__ == "__main__":
+    # Inisialisasi Google Sheets saat aplikasi dimulai
+    if not initialize_google_sheets():
+        logging.error("Gagal menginisialisasi Google Sheets. Bot mungkin tidak dapat mencatat data.")
+        # Tetap lanjutkan untuk Flask agar Render tidak error, tapi fungsionalitas Sheets tidak akan jalan
+
+    # Jalankan bot Telegram di background menggunakan asyncio task
+    import asyncio
+    logging.info("Mulai menjalankan bot Telegram sebagai task asyncio...")
+    asyncio.create_task(run_bot())
+    logging.info("Bot Telegram berhasil dijalankan sebagai task asyncio.")
+
+    # Jalankan aplikasi Flask di thread utama
     port = int(os.environ.get("PORT", 5000))
     logging.info(f"Aplikasi Flask dimulai di port {port}...")
     app.run(host="0.0.0.0", port=port)
