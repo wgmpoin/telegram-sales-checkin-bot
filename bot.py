@@ -1,135 +1,67 @@
+
 import os
-import logging
-from datetime import datetime
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, ConversationHandler
-
-# Enable logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
-
-# State definitions for ConversationHandler
-NAMA_TOKO, ALAMAT, GPS = range(3)
-
-# Load Google Sheets creds from environment variable JSON string
 import json
-creds_json = os.environ.get('GOOGLE_CREDS_JSON')
-if not creds_json:
-    raise Exception("Google credentials not found in env variable 'GOOGLE_CREDS_JSON'")
-creds_dict = json.loads(creds_json)
+import base64
+import logging
+import gspread
+from flask import Flask
+from datetime import datetime
+from oauth2client.service_account import ServiceAccountCredentials
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters as tg_filters
+)
+
+# Logging setup
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+
+# Flask route (for Render keep-alive)
+app = Flask(__name__)
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+# Load and decode base64 Google credentials
+base64_creds = os.environ.get("GCP_CREDENTIALS_BASE64")
+if not base64_creds:
+    raise Exception("GCP_CREDENTIALS_BASE64 not found in environment!")
+
+json_str = base64.b64decode(base64_creds).decode("utf-8")
+creds_dict = json.loads(json_str)
 
 scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-credentials = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-gc = gspread.authorize(credentials)
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+client = gspread.authorize(creds)
+sheet = client.open('Checkin Sales').sheet1
 
-# Open your Google Sheet by name
-SPREADSHEET_NAME = os.environ.get('SPREADSHEET_NAME', 'SalesCheckin')
-sheet = gc.open(SPREADSHEET_NAME).sheet1
-
-# Store sales Telegram IDs who can use bot (for simplicity, read from env)
-AUTHORIZED_SALES = os.environ.get('AUTHORIZED_SALES', '')
-AUTHORIZED_SALES_IDS = [int(x.strip()) for x in AUTHORIZED_SALES.split(',') if x.strip()]
-
+# Telegram Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in AUTHORIZED_SALES_IDS:
-        await update.message.reply_text("Maaf, Anda tidak terdaftar sebagai sales.")
-        return ConversationHandler.END
+    await update.message.reply_text("Halo! Silakan ketik nama toko untuk check-in.")
 
-    await update.message.reply_text(
-        "Halo Sales! Silakan ketik nama toko yang ingin Anda check-in."
-    )
-    return NAMA_TOKO
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.message.from_user
+    store_name = update.message.text
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-async def nama_toko(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['nama_toko'] = update.message.text
-    await update.message.reply_text("Masukkan alamat/wilayah toko (bisa kota, kecamatan, jalan, dsb):")
-    return ALAMAT
+    sheet.append_row([str(user.id), user.first_name, store_name, timestamp])
+    await update.message.reply_text(f"Check-in disimpan!\nNama toko: {store_name}\nWaktu: {timestamp}")
 
-async def alamat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['alamat'] = update.message.text
-    await update.message.reply_text("Kirimkan lokasi GPS toko dengan fitur 'Share Location' Telegram:")
-    return GPS
-
-async def gps(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.location is None:
-        await update.message.reply_text("Tolong kirim lokasi GPS dengan benar (gunakan fitur 'Share Location').")
-        return GPS
-
-    lokasi = update.message.location
-    latitude = lokasi.latitude
-    longitude = lokasi.longitude
-    lokasi_link = f"https://maps.google.com/?q={latitude},{longitude}"
-
-    user_data = context.user_data
-    nama_toko = user_data['nama_toko']
-    alamat = user_data['alamat']
-
-    now = datetime.now()
-    tanggal = now.strftime("%Y-%m-%d")
-    waktu = now.strftime("%H:%M:%S")
-
-    # Hitung berapa kali sudah dikunjungi bulan ini
-    all_records = sheet.get_all_records()
-    bulan_ini = now.strftime("%Y-%m")
-    kunjungan_bulan_ini = 0
-    for row in all_records:
-        # Format tanggal di sheet harus yyyy-mm-dd
-        if row['Nama Toko'] == nama_toko and row['Tanggal'].startswith(bulan_ini):
-            kunjungan_bulan_ini += 1
-
-    # Masukkan data baru
-    sheet.append_row([
-        nama_toko,
-        alamat,
-        tanggal,
-        waktu,
-        lokasi_link,
-        kunjungan_bulan_ini + 1
-    ])
-
-    await update.message.reply_text(
-        f"Check-in berhasil untuk toko *{nama_toko}*.\n"
-        f"Alamat: {alamat}\n"
-        f"Tanggal: {tanggal}\n"
-        f"Waktu: {waktu}\n"
-        f"Lokasi: {lokasi_link}\n"
-        f"Ini adalah kunjungan ke-{kunjungan_bulan_ini + 1} Anda bulan ini.",
-        parse_mode='Markdown'
-    )
-
-    return ConversationHandler.END
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Check-in dibatalkan.")
-    return ConversationHandler.END
-
+# Main bot function
 def main():
-    TOKEN = os.environ.get('TELEGRAM_TOKEN')
+    TOKEN = os.environ.get("BOT_TOKEN")
     if not TOKEN:
-        raise Exception("Token Telegram tidak ditemukan di environment variable 'TELEGRAM_TOKEN'")
+        raise Exception("BOT_TOKEN environment variable not found!")
 
-    application = ApplicationBuilder().token(TOKEN).build()
-
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start)],
-        states={
-            NAMA_TOKO: [MessageHandler(filters.TEXT & ~filters.COMMAND, nama_toko)],
-            ALAMAT: [MessageHandler(filters.TEXT & ~filters.COMMAND, alamat)],
-            GPS: [MessageHandler(filters.LOCATION, gps)],
-        },
-        fallbacks=[CommandHandler('cancel', cancel)],
-    )
-
-    application.add_handler(conv_handler)
+    app_bot = ApplicationBuilder().token(TOKEN).build()
+    app_bot.add_handler(CommandHandler("start", start))
+    app_bot.add_handler(MessageHandler(tg_filters.TEXT & ~tg_filters.COMMAND, handle_message))
 
     print("Bot started...")
-    application.run_polling()
+    app_bot.run_polling()
 
 if __name__ == '__main__':
     main()
