@@ -8,6 +8,13 @@ from google.oauth2 import service_account
 import gspread
 import asyncio
 
+# Pastikan import ini ada dan benar di awal file
+from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler, ContextTypes, ConversationHandler, filters
+)
+
+
 # Konfigurasi logging agar lebih mudah melihat pesan di log Render
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -168,7 +175,6 @@ async def lokasi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         lat = update.message.location.latitude
         lon = update.message.location.longitude
         # Format yang lebih umum dan disarankan untuk Google Maps
-        # Ini adalah baris 171
         location_link = f"http://maps.google.com/maps?q={lat},{lon}" 
         logging.info(f"Lokasi diterima: Lat={lat}, Lon={lon} dari {update.effective_user.full_name}")
     elif update.message.text and update.message.text.lower() == 'skip':
@@ -193,7 +199,7 @@ async def jumlah_kunjungan(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         logging.info(f"Jumlah Kunjungan diterima: {jumlah_kunjungan_int} dari {update.effective_user.full_name}")
     except ValueError:
         await update.message.reply_text("Maaf, jumlah kunjungan harus berupa angka. Silakan coba lagi.")
-        return JUMLAH_KUNJUNGAN # Perbaikan agar kembali ke state yang sama jika input salah
+        return JUMLAH_KUNJUNGAN 
 
     now = datetime.now() 
     tanggal = now.strftime("%Y-%m-%d")
@@ -228,7 +234,6 @@ async def jumlah_kunjungan(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 parse_mode="Markdown"
             )
         else:
-            # Seharusnya tidak tercapai jika checkin_command sudah memeriksa sheet
             logging.error("Koneksi Google Sheet belum terinisialisasi saat mencoba mencatat data. Tidak dapat mencatat data.")
             await update.message.reply_text("Maaf, ada masalah dalam menghubungkan ke Google Sheet. Mohon coba lagi nanti.")
     except Exception as e:
