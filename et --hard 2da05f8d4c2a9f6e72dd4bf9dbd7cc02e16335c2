@@ -1,0 +1,47 @@
+[33mcommit 2c5d70553710644d575e833dec8b68a72b90f29c[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmaster[m[33m)[m
+Author: wgmpoin <ptbis.pm1@gmail.com>
+Date:   Sat Jun 7 22:26:32 2025 +0800
+
+    Clean up sensitive JSON files from repository and update .gitignore
+
+[33mcommit 49c9beff7968580ec6e89bff72b555ce0e4398c9[m
+Author: wgmpoin <ptbis.pm1@gmail.com>
+Date:   Sat Jun 7 22:14:33 2025 +0800
+
+    Update bot to use webhook for Render deployment
+
+[33mcommit 2da05f8d4c2a9f6e72dd4bf9dbd7cc02e16335c2[m[33m ([m[1;31morigin/master[m[33m)[m
+Author: wgmpoin <ptbis.pm1@gmail.com>
+Date:   Sat Jun 7 16:33:56 2025 +0800
+
+    Add authorized sales access control
+
+[33mcommit 8ca0ce8fe7124039c5cda38a158c29fc81e31bcc[m
+Author: wgmpoin <ptbis.pm1@gmail.com>
+Date:   Sat Jun 7 15:58:17 2025 +0800
+
+    Confirmed Google Sheet tab name is Sheet1
+
+[33mcommit 45c308a553e4aa10121aa90921ad194e3ac9045a[m
+Author: wgmpoin <ptbis.pm1@gmail.com>
+Date:   Sat Jun 7 15:17:36 2025 +0800
+
+    Fix SyntaxError and use Spreadsheet ID
+
+[33mcommit 82bfb9575381b5df2385982cd4441e7b8222e6f8[m
+Author: wgmpoin <ptbis.pm1@gmail.com>
+Date:   Sat Jun 7 14:44:25 2025 +0800
+
+    Fixed spreadsheet name and ensured direct access
+
+[33mcommit ac9d2bbb1881e91ce8e4d3661c6c1a3f683a3351[m
+Author: wgmpoin <ptbis.pm1@gmail.com>
+Date:   Sat Jun 7 13:53:42 2025 +0800
+
+    Update main.py with correct Google Sheets and Drive scopes
+
+[33mcommit 6a2e4b5d724efc60216fedc22b059026eebae1f4[m
+Author: wgmpoin <ptbis.pm1@gmail.com>
+Date:   Mon Jun 2 16:21:33 2025 +0800
+
+    Initial push without credentials
