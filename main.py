@@ -145,27 +145,11 @@ app = Flask(__name__)
 async def telegram_webhook():
     logger.info("Menerima pembaruan dari Telegram.")
     try:
-        # application.process_update() adalah async method, jadi perlu await
-        # application object sudah global, tidak perlu `async with application:` di sini
         await application.process_update(Update.de_json(request.get_json(force=True), application.bot))
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         logger.error(f"Gagal memproses pembaruan Telegram: {e}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
-
-# --- Bagian Startup Aplikasi ---
-# Ini akan dijalankan saat `main.py` dieksekusi oleh Render
-@app.before_serving
-async def startup_event():
-    # Pastikan application terinisialisasi dan webhook disetel sekali
-    try:
-        await application.initialize()
-        await application.bot.set_webhook(url=WEBHOOK_URL)
-        logger.info(f"Inisialisasi bot Telegram selesai. Webhook aktif: {WEBHOOK_URL}")
-    except Exception as e:
-        logger.error(f"Gagal mengatur webhook atau menginisialisasi bot: {e}", exc_info=True)
-        # Jika webhook gagal diatur, bot tidak akan berfungsi dengan baik.
-        # Anda mungkin ingin keluar atau melakukan penanganan kesalahan lainnya.
 
 # Tambahkan handlers setelah application diinisialisasi
 application.add_handler(CommandHandler("start", start_command))
@@ -173,21 +157,67 @@ application.add_handler(CommandHandler("checkin", checkin_command))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))
-    logger.info(f"Aplikasi Flask dimulai di port {port}...")
-    
-    # Untuk Render, Flask biasanya dijalankan oleh Gunicorn (jika Anda memiliki Procfile: web: gunicorn main:app)
-    # atau Werkzeug server yang akan otomatis memulai `app.run()`.
-    # Jadi, kita tidak perlu memanggil app.run() secara eksplisit di sini,
-    # kecuali jika Anda tidak menggunakan Procfile dan ingin Flask langsung berjalan.
-    # Namun, for robustness, kita tetap bisa menjalankannya.
-    # Note: Werkzeug/Flask built-in server TIDAK direkomendasikan untuk produksi.
-    # Render biasanya menangani ini dengan baik jika Procfile diatur.
-    
-    # Jika Anda tidak memiliki Procfile yang mengarahkan ke Gunicorn,
-    # baris di bawah ini akan memulai Flask development server:
-    # app.run(host="0.0.0.0", port=port)
-    # Karena Render secara otomatis menjalankan Flask atau Gunicorn, baris ini seringkali tidak perlu.
-    # Log 'Serving Flask app' dan 'Running on all addresses' menunjukkan Flask sudah dimulai.
-    pass # Biarkan ini kosong karena Render akan menjalankan Flask secara otomatis
+# Ini akan dijalankan sekali saat aplikasi dimulai oleh Gunicorn
+# Kita menggunakan asyncio.run untuk menjalankan async function di luar async context
+# Pastikan ini hanya berjalan saat script dijalankan secara langsung (saat testing/local)
+# Untuk production dengan Gunicorn, kita perlu cara yang lebih baik
+# Alternatif: Panggil set_webhook di build command Render.
+# Untuk saat ini, kita akan coba pendekatan berikut untuk memastikan webhook terset.
+# Namun, cara terbaik untuk produksi adalah dengan `set_webhook` di build command Render.
+
+# Hapus bagian ini jika bot sudah jalan dengan baik dan tidak ada lagi masalah webhook
+# atau jika Anda ingin set webhook secara manual di build command Render.
+async def set_telegram_webhook():
+    try:
+        await application.initialize()
+        await application.bot.set_webhook(url=WEBHOOK_URL)
+        logger.info(f"Webhook Telegram berhasil disetel: {WEBHOOK_URL}")
+    except Exception as e:
+        logger.error(f"Gagal menyetel webhook Telegram: {e}", exc_info=True)
+        # Jika webhook gagal diatur, bot tidak akan berfungsi.
+
+# Panggil set_telegram_webhook HANYA SEKALI saat startup Gunicorn.
+# Penting: Gunicorn menjalankan `main:app`, bukan `python main.py` secara langsung.
+# Jadi, blok `if __name__ == '__main__':` TIDAK AKAN dieksekusi oleh Gunicorn.
+# Kita perlu menginisialisasi bot di luar blok itu.
+# Kode di bawah ini akan dijalankan saat Gunicorn memuat `main.py`.
+
+# Jika Anda menemukan webhook tidak terset, opsi terbaik adalah menjalankan ini di Render Build Command:
+# python -c "import asyncio; from main import application, WEBHOOK_URL; asyncio.run(application.initialize()); asyncio.run(application.bot.set_webhook(url=WEBHOOK_URL))"
+
+# Untuk sementara, mari kita biarkan inisialisasi ini di global scope
+# Karena Gunicorn akan memuat 'main.py' dan mengeksekusi top-level code.
+# Tetapi ini bukan solusi terbaik untuk produksi, lebih baik di Build Command.
+
+# Hapus baris ini dari kode Anda, karena webhook akan diset di Build Command Render
+# async def setup_bot_webhook():
+#     await application.initialize()
+#     await application.bot.set_webhook(url=WEBHOOK_URL)
+
+# asyncio.run(setup_bot_webhook()) # INI JANGAN ADA DI main.py LAGI UNTUK PRODUKSI DENGAN GUNICORN
+
+# Agar set_webhook bisa berjalan saat build (sekali saja)
+# Anda bisa tambahkan ini ke Build Command di Render:
+# python -c "import asyncio; from main import application, WEBHOOK_URL; asyncio.run(application.initialize()); asyncio.run(application.bot.set_webhook(url=WEBHOOK_URL))" && pip install -r requirements.txt
+
+# Untuk deployment kali ini, mari kita hapus @app.before_serving dan coba lagi.
+# Kita akan atur webhook di Build Command Render.
+
+# Baris ini HANYA untuk development lokal, tidak untuk Render (karena Render pakai Gunicorn)
+# if __name__ == '__main__':
+#     port = int(os.environ.get('PORT', 10000))
+#     logger.info(f"Aplikasi Flask dimulai di port {port}...")
+#     app.run(host="0.0.0.0", port=port) # Ini akan diganti oleh Gunicorn
+
+# Inisialisasi bot dan set webhook sekarang dilakukan di Build Command Render
+# atau secara manual setelah deployment berhasil.
+# Ini adalah pendekatan yang paling stabil untuk Render.
+# Kita akan hapus bagian startup_event dari Flask.
+
+# Pastikan aplikasi diinisialisasi untuk handler
+asyncio.run(application.initialize())
+logger.info("Application Telegram handlers initialized.")
+
+# TIDAK PERLU lagi baris @app.before_serving
+# Hapus juga blok `if __name__ == '__main__':` jika Anda menggunakan Gunicorn.
+# Biarkan `app = Flask(__name__)` dan handler Flask lainnya.
