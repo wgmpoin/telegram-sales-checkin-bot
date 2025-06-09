@@ -1,63 +1,55 @@
 import logging
+import os
 import asyncio
 from datetime import datetime, timedelta, timezone
 
 from flask import Flask, request, jsonify
 from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    ContextTypes, filters
+    ApplicationBuilder,
+    ContextTypes,
+    CommandHandler,
+    MessageHandler,
+    filters
 )
 
 import gspread
 from google.oauth2.service_account import Credentials
 
-# Logging
-logging.basicConfig(level=logging.INFO)
+# --- Konfigurasi Logging ---
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-# --- Konfigurasi ---
-TELEGRAM_TOKEN = "ISI_TOKEN_BOT_MU"
-GOOGLE_SHEET_ID = "ISI_ID_SHEET_MU"
-AUTHORIZED_SALES_IDS = [123456789, 987654321]  # Ganti dengan user_id yang diizinkan
-WEBHOOK_URL = "https://NAMA-RENDER.onrender.com"
+# --- Load ENV Variables ---
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
+AUTHORIZED_IDS = os.environ.get("AUTHORIZED_SALES_IDS", "")
+authorized_sales_ids = list(map(int, AUTHORIZED_IDS.split(','))) if AUTHORIZED_IDS else []
 
-# --- Google Sheets ---
+# --- Setup Google Sheets ---
 worksheet = None
 try:
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
-    gc = gspread.authorize(creds)
-    sh = gc.open_by_key(GOOGLE_SHEET_ID)
-    worksheet = sh.sheet1
-    logger.info("Google Sheets terhubung.")
+    client = gspread.authorize(creds)
+    spreadsheet = client.open_by_key(GOOGLE_SHEET_ID)
+    worksheet = spreadsheet.sheet1
+    logger.info("Google Sheet berhasil terhubung.")
 except Exception as e:
-    logger.error(f"Gagal terhubung ke Google Sheets: {e}")
+    logger.error(f"Gagal menghubungkan ke Google Sheets: {e}")
 
-# --- Telegram Handlers ---
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Halo! Kirim data dengan format: Nama, 1000000")
+# --- Setup Telegram Bot ---
+application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-async def checkin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Silakan kirim: Nama, jumlah sales. Contoh:\n\nJohn Doe, 5000000")
+# --- Command Handlers ---
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text("Selamat datang! Kirim pesan dengan format:\n`Nama Lengkap, 1000000`", parse_mode="Markdown")
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_full_name = update.effective_user.full_name
+async def checkin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text("Silakan kirim nama dan jumlah sales:\nContoh: `Nama Lengkap, 1000000`", parse_mode="Markdown")
 
-    if user_id not in AUTHORIZED_SALES_IDS:
-        logger.warning(f"Unauthorized user {user_id} ({user_full_name})")
-        await update.message.reply_text("Maaf, Anda tidak memiliki izin untuk menggunakan bot ini.")
-        return
-
-    text = update.message.text
-    if not text:
-        await update.message.reply_text("Pesan kosong tidak valid.")
-        return
-
-    try:
-        parts = text.split(',')
-        if len(parts) != 2:
-            raise ValueError("Format tidak sesuai. Contoh: Nama Lengkap, 1000000")
-
-        sales_person_name = pa
+# --- Message Handler ---
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_T
