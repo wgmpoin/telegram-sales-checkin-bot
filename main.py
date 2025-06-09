@@ -10,7 +10,6 @@ logging.basicConfig(
 )
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_full_name = update.effective_user.full_name
     await update.message.reply_text(f'Halo, {user_full_name}! Bot ini sudah aktif.')
 
 if __name__ == '__main__':
