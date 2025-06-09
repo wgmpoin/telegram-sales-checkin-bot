@@ -9,7 +9,7 @@ logging.basicConfig(
 )
 
 # Token bot Telegram kamu
-BOT_TOKEN = '7973184485:AAFe_vtRK4nYjf_Re3J4HSSaeF07dM2HyoM'
+BOT_TOKEN = '7973184485:AAHSRCxhazoqMm0TTOQ6ZNoiiCYe6UHkGeQ'
 
 # Fungsi saat /start dikirim
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
