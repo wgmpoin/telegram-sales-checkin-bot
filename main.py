@@ -9,7 +9,7 @@ logging.basicConfig(
 )
 
 # Ganti dengan token bot kamu
-BOT_TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN_HERE'
+BOT_TOKEN = '7973184485:AAHSRCxhazoqMm0TTOQ6ZNoiiCYe6UHkGeQ'
 
 # Contoh command handler /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
