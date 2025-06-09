@@ -1,61 +1,44 @@
 # main.py
 
-import logging
+from fastapi import FastAPI, Request
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
     ContextTypes,
-    filters,
+    CommandHandler,
 )
-from fastapi import FastAPI
-from starlette.requests import Request
-from telegram.ext.webhook import WebhookServer
-
+import asyncio
 import os
 
-# Konfigurasi logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+# Ganti dengan token bot Anda
+BOT_TOKEN = os.getenv("BOT_TOKEN", "ISI_TOKEN_BOT_ANDA")
+WEBHOOK_PATH = "/webhook"
+WEBHOOK_URL = f"https://yourdomain.com{WEBHOOK_PATH}"  # Ganti yourdomain.com sesuai URL Anda
 
-# Inisialisasi FastAPI
 app = FastAPI()
+telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-# TOKEN Telegram Anda
-TELEGRAM_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
-
-# Handler command `/start`
+# Handler untuk /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Halo! Bot berhasil dijalankan.")
+    await update.message.reply_text("Halo! Bot sudah aktif.")
 
-# Handler untuk pesan biasa
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_message = update.message.text
-    await update.message.reply_text(f"Kamu mengirim: {user_message}")
+# Tambahkan handler ke aplikasi Telegram
+telegram_app.add_handler(CommandHandler("start", start))
 
-# Jalankan aplikasi Telegram Bot sebagai background task di FastAPI
+# Endpoint webhook untuk menerima update dari Telegram
+@app.post(WEBHOOK_PATH)
+async def telegram_webhook(request: Request):
+    update_dict = await request.json()
+    update = Update.de_json(update_dict, telegram_app.bot)
+    await telegram_app.process_update(update)
+    return {"ok": True}
+
+# Fungsi startup untuk mengatur webhook ke Telegram
 @app.on_event("startup")
-async def startup():
-    application = (
-        ApplicationBuilder()
-        .token(TELEGRAM_TOKEN)
-        .build()
-    )
+async def on_startup():
+    await telegram_app.bot.set_webhook(WEBHOOK_URL)
 
-    # Tambahkan handler
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    # Jalankan polling bot
-    # Ganti dengan webhook jika dibutuhkan
-    await application.initialize()
-    await application.start()
-    app.bot_app = application
-
+# Fungsi shutdown untuk membersihkan webhook
 @app.on_event("shutdown")
-async def shutdown():
-    await app.bot_app.stop()
-    await app.bot_app.shutdown()
+async def on_shutdown():
+    await telegram_app.bot.delete_webhook()
