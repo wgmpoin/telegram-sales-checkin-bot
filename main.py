@@ -1,33 +1,30 @@
 import logging
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-import os
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# Konfigurasi logging
+# Set up logging (optional tapi disarankan)
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
-# Ambil token dan channel ID dari environment variable
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")
+# Ganti dengan token bot kamu
+BOT_TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN_HERE'
 
-# Command /start
+# Contoh command handler /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Halo! Kirim pesan apa pun, dan saya akan teruskan ke channel.")
+    await update.message.reply_text("Halo! Bot aktif.")
 
-# Handler untuk semua pesan
-async def forward_to_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    await context.bot.send_message(chat_id=CHANNEL_ID, text=text)
-    await update.message.reply_text("Pesanmu sudah dikirim ke channel.")
+# Fungsi utama
+def main():
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
 
+    # Tambahkan handler command
+    application.add_handler(CommandHandler("start", start))
+
+    # Jalankan bot dengan polling
+    application.run_polling()
+
+# Hanya dijalankan kalau file ini dipanggil langsung
 if __name__ == '__main__':
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler('start', start))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), forward_to_channel))
-
-    print("Bot berjalan...")
-    app.run_polling()
+    main()
