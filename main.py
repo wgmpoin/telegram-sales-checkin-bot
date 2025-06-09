@@ -1,15 +1,17 @@
 import logging
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+import os
 
 # Konfigurasi logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
-# Ganti dengan token bot kamu
-BOT_TOKEN = 'YOUR_BOT_TOKEN'
-
-# Ganti dengan ID channel kamu, format: '@nama_channel' atau ID negatif seperti -1001234567890
-CHANNEL_ID = '@nama_channel_kamu'
+# Ambil token dan channel ID dari environment variable
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
 
 # Command /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
