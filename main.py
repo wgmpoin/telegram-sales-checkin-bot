@@ -11,8 +11,9 @@ logging.basicConfig(
 # Token bot Telegram kamu
 BOT_TOKEN = '7973184485:AAHSRCxhazoqMm0TTOQ6ZNoiiCYe6UHkGeQ'
 
-# Fungsi saat /start dikirim
+# Fungsi saat perintah /start diterima
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_full_name = update.effective_user.full_name
     await update.message.reply_text(f"Halo {user_full_name}, selamat datang!")
 
 # Fungsi utama
