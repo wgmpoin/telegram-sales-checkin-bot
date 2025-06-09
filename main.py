@@ -1,55 +1,61 @@
-import logging
-import os
-import asyncio
-from datetime import datetime, timedelta, timezone
+# main.py
 
-from flask import Flask, request, jsonify
+import logging
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
-    ContextTypes,
     CommandHandler,
     MessageHandler,
-    filters
+    ContextTypes,
+    filters,
 )
+from fastapi import FastAPI
+from starlette.requests import Request
+from telegram.ext.webhook import WebhookServer
 
-import gspread
-from google.oauth2.service_account import Credentials
+import os
 
-# --- Konfigurasi Logging ---
+# Konfigurasi logging
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
 )
-logger = logging.getLogger(__name__)
 
-# --- Load ENV Variables ---
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
-AUTHORIZED_IDS = os.environ.get("AUTHORIZED_SALES_IDS", "")
-authorized_sales_ids = list(map(int, AUTHORIZED_IDS.split(','))) if AUTHORIZED_IDS else []
+# Inisialisasi FastAPI
+app = FastAPI()
 
-# --- Setup Google Sheets ---
-worksheet = None
-try:
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
-    client = gspread.authorize(creds)
-    spreadsheet = client.open_by_key(GOOGLE_SHEET_ID)
-    worksheet = spreadsheet.sheet1
-    logger.info("Google Sheet berhasil terhubung.")
-except Exception as e:
-    logger.error(f"Gagal menghubungkan ke Google Sheets: {e}")
+# TOKEN Telegram Anda
+TELEGRAM_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
 
-# --- Setup Telegram Bot ---
-application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+# Handler command `/start`
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Halo! Bot berhasil dijalankan.")
 
-# --- Command Handlers ---
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("Selamat datang! Kirim pesan dengan format:\n`Nama Lengkap, 1000000`", parse_mode="Markdown")
+# Handler untuk pesan biasa
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_message = update.message.text
+    await update.message.reply_text(f"Kamu mengirim: {user_message}")
 
-async def checkin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("Silakan kirim nama dan jumlah sales:\nContoh: `Nama Lengkap, 1000000`", parse_mode="Markdown")
+# Jalankan aplikasi Telegram Bot sebagai background task di FastAPI
+@app.on_event("startup")
+async def startup():
+    application = (
+        ApplicationBuilder()
+        .token(TELEGRAM_TOKEN)
+        .build()
+    )
 
-# --- Message Handler ---
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_T
+    # Tambahkan handler
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # Jalankan polling bot
+    # Ganti dengan webhook jika dibutuhkan
+    await application.initialize()
+    await application.start()
+    app.bot_app = application
+
+@app.on_event("shutdown")
+async def shutdown():
+    await app.bot_app.stop()
+    await app.bot_app.shutdown()
