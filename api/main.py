@@ -1,11 +1,15 @@
-from flask import Flask, request
+# ... (semua kode bot Anda di atas) ...
 
+# --- Flask App untuk Vercel ---
 app = Flask(__name__)
 
 @app.route('/api/webhook', methods=['POST'])
-def webhook_test():
-    return "Webhook endpoint is working!", 200
+async def webhook_handler():
+    # Handle Telegram update here
+    # (Pastikan ini adalah bagian yang memproses update dari Telegram)
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(force=True), application.bot)
+        await application.process_update(update)
+    return "ok"
 
-@app.route('/', methods=['GET'])
-def root_test():
-    return "Root endpoint is working!", 200
+# Tidak ada 'if __name__ == "__main__":' atau 'app.run()' di sini!
